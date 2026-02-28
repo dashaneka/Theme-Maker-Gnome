@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "theme-maker-gnome"
+version = "1.0.0"
+description = "Generate system-wide GNOME themes from any wallpaper"
+readme = "INSTALL.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "rajnish"}]
+dependencies = [
+    "Pillow>=10.0",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+theme-maker = "theme_maker.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["theme_maker*"]
