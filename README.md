@@ -4,7 +4,7 @@ Generate complete system-wide GNOME themes from any wallpaper image. Extracts do
 
 ## What it generates
 
-One command produces **33 files** across 10 targets:
+One command produces **34 files** across 11 targets:
 
 | Target | Files |
 |--------|-------|
@@ -22,6 +22,7 @@ One command produces **33 files** across 10 targets:
 | Antigravity | VSIX package (auto-installed) |
 | OpenCode | Theme JSON |
 | Kilo Code | Theme JSON |
+| **Vim/Neovim** | **Complete color scheme with 100+ highlight groups** |
 | Fastfetch | Accent-colored config with wallpaper logo |
 | INSTALL.md | Step-by-step manual installation guide |
 
@@ -138,6 +139,7 @@ options:
     antigravity/ (same as vscode)
     opencode/   (<name>.json, opencode.json)
     kilo/       (<name>.json, kv.json)
+    vim/        (colors/<name>.vim)  ← Full Vim/Neovim color scheme
   fastfetch/
     config.jsonc
 ```
@@ -155,8 +157,31 @@ theme_maker/
     gtk.py             GTK3, GTK4/libadwaita, GNOME Shell
     browsers.py        Firefox, Zen Browser, Chrome
     terminal.py        Ptyxis, Starship, Pywal, Xresources
-    editors.py         VS Code, Antigravity, OpenCode, Kilo
+    editors.py         VS Code, Antigravity, OpenCode, Kilo, Vim/Neovim
+    icons.py           Papirus-Dark folder icon recoloring
+    cursors.py         Bibata cursor theme building
     extras.py          Fastfetch, INSTALL.md
+```
+
+## Vim/Neovim Theme
+
+The generated Vim color scheme includes:
+
+- **100+ highlight groups** covering UI, syntax, and plugins
+- **Dual mode support**: GUI colors (`guifg/guibg`) for modern Vim + 256-color terminal (`ctermfg/ctermbg`)
+- **Neovim terminal colors**: All 16 ANSI colors exported as `g:terminal_color_*`
+- **Treesitter support**: Full highlight groups for modern Neovim syntax parsing
+- **LSP diagnostics**: Error, warning, info, hint highlights with undercurls
+- **Git gutter integration**: Added, changed, deleted indicators
+- **Plugin support**: NERDTree, Netrw, markdown, HTML highlighting
+
+The theme is installed to:
+- `~/.vim/colors/<name>.vim` (Vim)
+- `~/.config/nvim/colors/<name>.vim` (Neovim)
+
+To use, add to your `.vimrc` or `init.vim`:
+```vim
+colorscheme <theme_name>
 ```
 
 ## Design choices

@@ -1,6 +1,8 @@
 """CLI entry point for Theme Maker for GNOME."""
 
 import argparse
+import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +20,8 @@ from theme_maker.generators.browsers import write_browser_files
 from theme_maker.generators.terminal import write_terminal_files
 from theme_maker.generators.editors import write_editor_files
 from theme_maker.generators.extras import write_extra_files
+from theme_maker.generators.icons import generate_icon_theme
+from theme_maker.generators.cursors import generate_cursor_theme
 from theme_maker.applier import apply_theme
 
 
@@ -163,6 +167,105 @@ def _generate_all(output_dir: Path, palette: dict, name: str, wallpaper: str) ->
     write_terminal_files(output_dir, palette, name, wallpaper)
     write_editor_files(output_dir, palette, name)
     write_extra_files(output_dir, palette, name, wallpaper)
+    generate_icon_theme(output_dir, palette, name)
+    generate_cursor_theme(output_dir, palette, name)
+
+
+def _backup_current_theme(output_dir: Path) -> list[str]:
+    """Backup current theme settings as a reusable template."""
+    log: list[str] = []
+    home = Path.home()
+    
+    # Create backup directory
+    backup_dir = output_dir / "backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Backup gsettings
+    settings_to_backup = [
+        ("org.gnome.desktop.interface", "gtk-theme"),
+        ("org.gnome.desktop.interface", "color-scheme"),
+        ("org.gnome.desktop.interface", "accent-color"),
+        ("org.gnome.desktop.interface", "icon-theme"),
+        ("org.gnome.desktop.interface", "cursor-theme"),
+        ("org.gnome.shell.extensions.user-theme", "name"),
+        ("org.gnome.desktop.background", "picture-uri"),
+        ("org.gnome.desktop.background", "picture-uri-dark"),
+    ]
+    
+    settings_data = {}
+    for schema, key in settings_to_backup:
+        try:
+            result = subprocess.run(
+                ["gsettings", "get", schema, key],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            value = result.stdout.strip().strip("'\"")
+            if value and value != "''":
+                settings_data[f"{schema}.{key}"] = value
+                log.append(f"  Backed up: {schema}.{key} = {value}")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+    
+    # Save settings to JSON
+    settings_file = backup_dir / "settings.json"
+    settings_file.write_text(json.dumps(settings_data, indent=2))
+    log.append(f"  Saved settings to {settings_file}")
+    
+    # Backup GTK config files
+    gtk_configs = [
+        (home / ".config" / "gtk-3.0" / "settings.ini", "gtk3-settings.ini"),
+        (home / ".config" / "gtk-4.0" / "settings.ini", "gtk4-settings.ini"),
+        (home / ".config" / "gtk-3.0" / "gtk.css", "gtk3.css"),
+        (home / ".config" / "gtk-4.0" / "gtk.css", "gtk4.css"),
+    ]
+    
+    for src, dst_name in gtk_configs:
+        if src.exists():
+            dst = backup_dir / dst_name
+            shutil.copy2(src, dst)
+            log.append(f"  Backed up: {src} -> {dst}")
+    
+    # Backup theme directories
+    # NOTE: These can be large (hundreds of MB), so we warn the user.
+    theme_dirs = [
+        (home / ".themes", "themes"),
+        (home / ".icons", "icons"),
+    ]
+    
+    for src_dir, dst_name in theme_dirs:
+        if src_dir.exists():
+            dst = backup_dir / dst_name
+            if dst.exists():
+                shutil.rmtree(dst)
+            try:
+                shutil.copytree(src_dir, dst)
+                log.append(f"  Backed up: {src_dir} -> {dst}")
+            except (OSError, shutil.Error) as e:
+                log.append(f"  [WARN] Failed to backup {src_dir}: {e}")
+    
+    # Create backup manifest
+    manifest = {
+        "name": "Theme Backup",
+        "description": "Backup of current GNOME theme settings",
+        "settings": settings_data,
+        "files": [
+            "settings.json",
+            "gtk3-settings.ini",
+            "gtk4-settings.ini",
+            "gtk3.css",
+            "gtk4.css",
+            "themes/",
+            "icons/",
+        ],
+    }
+    
+    manifest_file = backup_dir / "manifest.json"
+    manifest_file.write_text(json.dumps(manifest, indent=2))
+    log.append(f"  Created manifest: {manifest_file}")
+    
+    return log
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,6 +299,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply theme system-wide after generating",
     )
     parser.add_argument(
+        "--backup",
+        action="store_true",
+        help="Backup current theme as a reusable template",
+    )
+    parser.add_argument(
         "--no-interactive",
         action="store_true",
         help="Skip all prompts, use defaults",
@@ -211,6 +319,25 @@ def main(argv: list[str] | None = None) -> int:
     interactive = not args.no_interactive
 
     _print_header()
+
+    # ── Handle backup mode ────────────────────────────────────────────────
+    if args.backup:
+        print(f"  {BOLD}Backing up current theme...{RESET}")
+        print()
+        
+        output = args.output or str(Path.home() / "ThemeBackup")
+        output_dir = Path(output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        logs = _backup_current_theme(output_dir)
+        for line in logs:
+            print(f"  {line}")
+        
+        print()
+        print(f"  {GREEN}{BOLD}Backup complete!{RESET}")
+        print(f"  {DIM}Backup saved to {output_dir}{RESET}")
+        print()
+        return 0
 
     # ── Step 1: Wallpaper ─────────────────────────────────────────────────
     wallpaper = args.wallpaper

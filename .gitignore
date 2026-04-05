@@ -21,3 +21,6 @@ Thumbs.db
 
 # Editable install artifacts
 *.egg-link
+
+# AI session logs / large generated docs
+themeCreation-*.md

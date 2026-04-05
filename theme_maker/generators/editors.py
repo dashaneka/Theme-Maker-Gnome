@@ -1,8 +1,26 @@
-"""Editor theme generators - VS Code, OpenCode, Kilo."""
+"""Editor theme generators - VS Code, OpenCode, Kilo, Vim."""
 
 import json
 from pathlib import Path
-from theme_maker.palette import darken
+from theme_maker.palette import darken, hex_to_rgb
+
+
+def _hex_to_256(hex_color: str) -> int:
+    """Convert hex color to approximate 256-color terminal code."""
+    r, g, b = hex_to_rgb(hex_color)
+    # Standard 256-color conversion
+    if r == g == b:
+        # Grayscale
+        if r < 8:
+            return 16
+        if r > 248:
+            return 231
+        return round(((r - 8) / 247) * 24) + 232
+    # Color cube (6x6x6)
+    r_idx = round((r / 255) * 5)
+    g_idx = round((g / 255) * 5)
+    b_idx = round((b / 255) * 5)
+    return 16 + (36 * r_idx) + (6 * g_idx) + b_idx
 
 
 def generate_vscode_theme(p: dict, name: str) -> str:
@@ -521,6 +539,418 @@ def generate_opencode_theme(p: dict, name: str) -> str:
     return json.dumps(data, indent=2)
 
 
+def generate_vim_theme(p: dict, name: str) -> str:
+    """Generate a Vim color scheme in .vim format."""
+    slug = name.lower().replace(" ", "_")
+
+    # Build cterm colors (256-color approximations)
+    cterm = {
+        "bg": _hex_to_256(p["bg_deepest"]),
+        "fg": _hex_to_256(p["text"]),
+        "accent": _hex_to_256(p["accent"]),
+        "accent_rose": _hex_to_256(p["accent_rose"]),
+        "accent_soft": _hex_to_256(p["accent_soft"]),
+        "green": _hex_to_256(p["green"]),
+        "red": _hex_to_256(p["accent_light"]),
+        "blue": _hex_to_256(p["blue"]),
+        "magenta": _hex_to_256(p["magenta"]),
+        "cyan": _hex_to_256(p["cyan"]),
+        "yellow": _hex_to_256(p["ansi_yellow"]),
+        "text_muted": _hex_to_256(p["text_muted"]),
+        "text_dim": _hex_to_256(p["text_dim"]),
+        "bg_surface": _hex_to_256(p["bg_surface"]),
+        "bg_elevated": _hex_to_256(p["bg_elevated"]),
+    }
+
+    return f"""" {name} - Auto-generated Vim color scheme
+" Maintainer: Theme Maker for GNOME
+" Background: dark
+
+set background=dark
+hi clear
+if exists("syntax_on")
+  syntax reset
+endif
+
+let g:colors_name = "{slug}"
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" UI Elements
+" ═══════════════════════════════════════════════════════════════════════════════
+
+" Normal text
+hi Normal guifg={p["text"]} guibg={p["bg_deepest"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg"]}
+
+" Cursor
+hi Cursor guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]}
+hi CursorLine guibg={p["bg_main"]} ctermbg={cterm["bg"]} gui=none
+hi CursorColumn guibg={p["bg_main"]} ctermbg={cterm["bg"]}
+
+" Line numbers
+hi LineNr guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]}
+hi CursorLineNr guifg={p["accent"]} guibg={p["bg_main"]} ctermfg={cterm["accent"]} ctermbg={cterm["bg"]} gui=bold
+
+" Status line
+hi StatusLine guifg={p["text"]} guibg={p["bg_surface"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg_surface"]} gui=none
+hi StatusLineNC guifg={p["text_muted"]} guibg={p["bg_main"]} ctermfg={cterm["text_muted"]} ctermbg={cterm["bg"]} gui=none
+
+" Vertical split
+hi VertSplit guifg={p["border"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]} gui=none
+
+" Tabs
+hi TabLine guifg={p["text_muted"]} guibg={p["bg_main"]} ctermfg={cterm["text_muted"]} ctermbg={cterm["bg"]} gui=none
+hi TabLineFill guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]} gui=none
+hi TabLineSel guifg={p["text"]} guibg={p["bg_surface"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg_surface"]} gui=bold
+
+" Search and match
+hi Search guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]}
+hi IncSearch guifg={p["bg_deepest"]} guibg={p["accent_rose"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent_rose"]}
+hi MatchParen guifg={p["accent"]} guibg=none ctermfg={cterm["accent"]} ctermbg=none gui=bold
+
+" Selection
+hi Visual guibg={p["accent"]}40 ctermbg={cterm["accent"]} gui=none
+hi VisualNOS guibg={p["accent"]}30 ctermbg={cterm["accent"]} gui=none
+
+" Folded text
+hi Folded guifg={p["text_muted"]} guibg={p["bg_surface"]} ctermfg={cterm["text_muted"]} ctermbg={cterm["bg_surface"]}
+hi FoldColumn guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]}
+
+" Pop-up menu
+hi Pmenu guifg={p["text"]} guibg={p["bg_surface"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg_surface"]}
+hi PmenuSel guifg={p["text"]} guibg={p["accent"]}30 ctermfg={cterm["fg"]} ctermbg={cterm["accent"]}
+hi PmenuSbar guibg={p["bg_elevated"]} ctermbg={cterm["bg_elevated"]}
+hi PmenuThumb guibg={p["accent"]} ctermbg={cterm["accent"]}
+
+" Wild menu
+hi WildMenu guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]}
+
+" Sign column (for gitgutter, diagnostics)
+hi SignColumn guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]}
+
+" Gutter
+hi GitGutterAdd guifg={p["green"]} guibg={p["bg_deepest"]} ctermfg={cterm["green"]} ctermbg={cterm["bg"]}
+hi GitGutterChange guifg={p["accent"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent"]} ctermbg={cterm["bg"]}
+hi GitGutterDelete guifg={p["accent_light"]} guibg={p["bg_deepest"]} ctermfg={cterm["red"]} ctermbg={cterm["bg"]}
+hi GitGutterChangeDelete guifg={p["accent_rose"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]}
+
+" Diagnostics (LSP)
+hi DiagnosticError guifg={p["accent_light"]} ctermfg={cterm["red"]}
+hi DiagnosticWarn guifg={p["ansi_yellow"]} ctermfg={cterm["yellow"]}
+hi DiagnosticInfo guifg={p["blue"]} ctermfg={cterm["blue"]}
+hi DiagnosticHint guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi DiagnosticOk guifg={p["green"]} ctermfg={cterm["green"]}
+
+" Underlines for diagnostics
+hi DiagnosticUnderlineError guifg=none guibg=none gui=underline guisp={p["accent_light"]}
+hi DiagnosticUnderlineWarn guifg=none guibg=none gui=underline guisp={p["ansi_yellow"]}
+hi DiagnosticUnderlineInfo guifg=none guibg=none gui=underline guisp={p["blue"]}
+hi DiagnosticUnderlineHint guifg=none guibg=none gui=underline guisp={p["cyan"]}
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Syntax Highlighting
+" ═══════════════════════════════════════════════════════════════════════════════
+
+" Comments
+hi Comment guifg={p["text_dim"]} ctermfg={cterm["text_dim"]} gui=italic
+
+" Constants
+hi Constant guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+hi String guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+hi Character guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+hi Number guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+hi Boolean guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+hi Float guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+
+" Identifiers
+hi Identifier guifg={p["text"]} ctermfg={cterm["fg"]}
+hi Function guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+
+" Statements
+hi Statement guifg={p["accent"]} ctermfg={cterm["accent"]} gui=none
+hi Conditional guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Repeat guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Label guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Operator guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]}
+hi Keyword guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Exception guifg={p["accent"]} ctermfg={cterm["accent"]}
+
+" Preprocessor
+hi PreProc guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Include guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Define guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Macro guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi PreCondit guifg={p["accent"]} ctermfg={cterm["accent"]}
+
+" Types
+hi Type guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=none
+hi StorageClass guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Structure guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+hi Typedef guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+
+" Special
+hi Special guifg={p["magenta"]} ctermfg={cterm["magenta"]}
+hi SpecialChar guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+hi Tag guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi Delimiter guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+hi SpecialComment guifg={p["text_dim"]} ctermfg={cterm["text_dim"]} gui=italic
+hi Debug guifg={p["accent_light"]} ctermfg={cterm["red"]}
+
+" Underlined
+hi Underlined guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
+
+" Ignore
+hi Ignore guifg={p["text_dim"]} ctermfg={cterm["text_dim"]}
+
+" Errors
+hi Error guifg={p["accent_light"]} guibg=none ctermfg={cterm["red"]} ctermbg=none gui=bold,underline
+hi ErrorMsg guifg={p["accent_light"]} guibg=none ctermfg={cterm["red"]} ctermbg=none
+hi WarningMsg guifg={p["ansi_yellow"]} guibg=none ctermfg={cterm["yellow"]} ctermbg=none
+
+" Todo
+hi Todo guifg={p["green"]} guibg=none ctermfg={cterm["green"]} ctermbg=none gui=bold
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Diff Mode
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi DiffAdd guifg={p["green"]} guibg={p["green"]}20 ctermfg={cterm["green"]} ctermbg={cterm["bg"]}
+hi DiffChange guifg={p["accent"]} guibg={p["accent"]}20 ctermfg={cterm["accent"]} ctermbg={cterm["bg"]}
+hi DiffDelete guifg={p["accent_light"]} guibg={p["accent_light"]}20 ctermfg={cterm["red"]} ctermbg={cterm["bg"]}
+hi DiffText guifg={p["accent_rose"]} guibg={p["accent_rose"]}30 ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]} gui=bold
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Spelling
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi SpellBad guifg={p["accent_light"]} gui=undercurl guisp={p["accent_light"]}
+hi SpellCap guifg={p["ansi_yellow"]} gui=undercurl guisp={p["ansi_yellow"]}
+hi SpellRare guifg={p["magenta"]} gui=undercurl guisp={p["magenta"]}
+hi SpellLocal guifg={p["cyan"]} gui=undercurl guisp={p["cyan"]}
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Terminal (Neovim/Vim terminal)
+" ═══════════════════════════════════════════════════════════════════════════════
+
+if has("nvim")
+  let g:terminal_color_0  = "{p["ansi_black"]}"
+  let g:terminal_color_1  = "{p["ansi_red"]}"
+  let g:terminal_color_2  = "{p["ansi_green"]}"
+  let g:terminal_color_3  = "{p["ansi_yellow"]}"
+  let g:terminal_color_4  = "{p["ansi_blue"]}"
+  let g:terminal_color_5  = "{p["ansi_magenta"]}"
+  let g:terminal_color_6  = "{p["ansi_cyan"]}"
+  let g:terminal_color_7  = "{p["ansi_white"]}"
+  let g:terminal_color_8  = "{p["ansi_bright_black"]}"
+  let g:terminal_color_9  = "{p["ansi_bright_red"]}"
+  let g:terminal_color_10 = "{p["ansi_bright_green"]}"
+  let g:terminal_color_11 = "{p["ansi_bright_yellow"]}"
+  let g:terminal_color_12 = "{p["ansi_bright_blue"]}"
+  let g:terminal_color_13 = "{p["ansi_bright_magenta"]}"
+  let g:terminal_color_14 = "{p["ansi_bright_cyan"]}"
+  let g:terminal_color_15 = "{p["ansi_bright_white"]}"
+endif
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Neovim Treesitter / LSP / Modern Plugins
+" ═══════════════════════════════════════════════════════════════════════════════
+
+if has("nvim")
+  " Treesitter
+  hi @text guifg={p["text"]} ctermfg={cterm["fg"]}
+  hi @text.strong guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=bold
+  hi @text.emphasis guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]} gui=italic
+  hi @text.underline guifg={p["text"]} ctermfg={cterm["fg"]} gui=underline
+  hi @text.strike guifg={p["text_muted"]} ctermfg={cterm["text_muted"]} gui=strikethrough
+  hi @text.literal guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @text.uri guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
+  hi @text.reference guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @text.title guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+  hi @text.todo guifg={p["green"]} ctermfg={cterm["green"]} gui=bold
+  hi @text.note guifg={p["blue"]} ctermfg={cterm["blue"]} gui=bold
+  hi @text.warning guifg={p["ansi_yellow"]} ctermfg={cterm["yellow"]} gui=bold
+  hi @text.danger guifg={p["accent_light"]} ctermfg={cterm["red"]} gui=bold
+  
+  " Treesitter - Code
+  hi @comment guifg={p["text_dim"]} ctermfg={cterm["text_dim"]} gui=italic
+  hi @punctuation guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  hi @punctuation.bracket guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  hi @punctuation.special guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @punctuation.delimiter guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  
+  hi @constant guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @constant.builtin guifg={p["accent_hover"]} ctermfg={cterm["accent"]} gui=italic
+  hi @constant.macro guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @define guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @macro guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @string guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @string.escape guifg={p["magenta"]} ctermfg={cterm["magenta"]}
+  hi @string.special guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @character guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @character.special guifg={p["magenta"]} ctermfg={cterm["magenta"]}
+  hi @number guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @float guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @boolean guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  
+  hi @function guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @function.builtin guifg={p["cyan"]} ctermfg={cterm["cyan"]} gui=italic
+  hi @function.call guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @function.macro guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @method guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @method.call guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @constructor guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @parameter guifg={p["text"]} ctermfg={cterm["fg"]} gui=italic
+  
+  hi @keyword guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.coroutine guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.function guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.operator guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]}
+  hi @keyword.import guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.storage guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.repeat guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.return guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @keyword.debug guifg={p["accent_light"]} ctermfg={cterm["red"]}
+  hi @keyword.exception guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @conditional guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @conditional.ternary guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @repeat guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @debug guifg={p["accent_light"]} ctermfg={cterm["red"]}
+  hi @label guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @include guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @exception guifg={p["accent"]} ctermfg={cterm["accent"]}
+  
+  hi @type guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @type.builtin guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=italic
+  hi @type.definition guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @type.qualifier guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @storageclass guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @attribute guifg={p["accent_hover"]} ctermfg={cterm["accent"]} gui=italic
+  hi @field guifg={p["text"]} ctermfg={cterm["fg"]}
+  hi @property guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  hi @variable guifg={p["text"]} ctermfg={cterm["fg"]}
+  hi @variable.builtin guifg={p["accent"]} ctermfg={cterm["accent"]} gui=italic
+  hi @variable.parameter guifg={p["text"]} ctermfg={cterm["fg"]} gui=italic
+  hi @variable.member guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  
+  hi @constant guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @constant.builtin guifg={p["accent_hover"]} ctermfg={cterm["accent"]} gui=italic
+  hi @constant.macro guifg={p["accent"]} ctermfg={cterm["accent"]}
+  
+  hi @namespace guifg={p["magenta"]} ctermfg={cterm["magenta"]}
+  hi @symbol guifg={p["accent"]} ctermfg={cterm["accent"]}
+  
+  " LSP
+  hi @lsp.type.class guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.decorator guifg={p["accent_hover"]} ctermfg={cterm["accent"]} gui=italic
+  hi @lsp.type.enum guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.enumMember guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+  hi @lsp.type.function guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @lsp.type.interface guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.macro guifg={p["accent"]} ctermfg={cterm["accent"]}
+  hi @lsp.type.method guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+  hi @lsp.type.namespace guifg={p["magenta"]} ctermfg={cterm["magenta"]}
+  hi @lsp.type.parameter guifg={p["text"]} ctermfg={cterm["fg"]} gui=italic
+  hi @lsp.type.property guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+  hi @lsp.type.struct guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.type guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.typeParameter guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+  hi @lsp.type.variable guifg={p["text"]} ctermfg={cterm["fg"]}
+endif
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" HTML / XML / Markdown
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi htmlArg guifg={p["accent_hover"]} ctermfg={cterm["accent"]}
+hi htmlBold guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=bold
+hi htmlEndTag guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi htmlH1 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlH2 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlH3 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlH4 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlH5 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlH6 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi htmlItalic guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]} gui=italic
+hi htmlLink guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
+hi htmlTag guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi htmlTagName guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi htmlTitle guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+
+hi markdownBold guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=bold
+hi markdownCode guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi markdownCodeBlock guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi markdownH1 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownH2 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownH3 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownH4 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownH5 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownH6 guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi markdownItalic guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]} gui=italic
+hi markdownLink guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
+hi markdownListMarker guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi markdownOrderedListMarker guifg={p["accent_soft"]} ctermfg={cterm["accent_soft"]}
+hi markdownRule guifg={p["border"]} ctermfg={cterm["text_dim"]}
+hi markdownUrl guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" NERDTree / Netrw / File Browsers
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi NERDTreeDir guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi NERDTreeDirSlash guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi NERDTreeOpenable guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi NERDTreeClosable guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi NERDTreeFile guifg={p["text"]} ctermfg={cterm["fg"]}
+hi NERDTreeExecFile guifg={p["green"]} ctermfg={cterm["green"]}
+hi NERDTreeUp guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+hi NERDTreeCWD guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]} gui=bold
+hi NERDTreeHelp guifg={p["text"]} ctermfg={cterm["fg"]}
+hi NERDTreeToggleOn guifg={p["green"]} ctermfg={cterm["green"]}
+hi NERDTreeToggleOff guifg={p["accent_light"]} ctermfg={cterm["red"]}
+
+" Netrw
+hi netrwDir guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi netrwClassify guifg={p["accent"]} ctermfg={cterm["accent"]}
+hi netrwLink guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi netrwSymLink guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi netrwExe guifg={p["green"]} ctermfg={cterm["green"]}
+hi netrwComment guifg={p["text_dim"]} ctermfg={cterm["text_dim"]}
+hi netrwList guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+hi netrwHelpCmd guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi netrwCmdSep guifg={p["text_muted"]} ctermfg={cterm["text_muted"]}
+hi netrwVersion guifg={p["accent_rose"]} ctermfg={cterm["accent_rose"]}
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Quickfix / Location List
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi qfFileName guifg={p["cyan"]} ctermfg={cterm["cyan"]}
+hi qfLineNr guifg={p["text_dim"]} ctermfg={cterm["text_dim"]}
+hi qfError guifg={p["accent_light"]} ctermfg={cterm["red"]}
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" Mode Messages
+" ═══════════════════════════════════════════════════════════════════════════════
+
+hi ModeMsg guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+hi MoreMsg guifg={p["green"]} ctermfg={cterm["green"]} gui=bold
+hi Question guifg={p["accent"]} ctermfg={cterm["accent"]} gui=bold
+
+" ═══════════════════════════════════════════════════════════════════════════════
+" End of color scheme
+" ═══════════════════════════════════════════════════════════════════════════════
+" To use this theme, add to your .vimrc or init.vim:
+"
+"   colorscheme {slug}
+"
+" Or for conditional loading:
+"
+"   if filereadable(expand("~/.vim/colors/{slug}.vim"))
+"     colorscheme {slug}
+"   endif
+" ═══════════════════════════════════════════════════════════════════════════════
+"""
+
+
 def write_editor_files(output_dir: Path, p: dict, name: str):
     """Write all editor theme files."""
     slug = name.lower().replace(" ", "-")
@@ -555,3 +985,10 @@ def write_editor_files(output_dir: Path, p: dict, name: str):
     (kilo_dir / f"{theme_slug}.json").write_text(generate_opencode_theme(p, name))
     kilo_kv = {"theme": theme_slug}
     (kilo_dir / "kv.json").write_text(json.dumps(kilo_kv, indent=2))
+
+    # Vim / Neovim
+    vim_dir = output_dir / "editors" / "vim"
+    vim_colors = vim_dir / "colors"
+    vim_colors.mkdir(parents=True, exist_ok=True)
+    vim_slug = name.lower().replace(" ", "_")
+    (vim_colors / f"{vim_slug}.vim").write_text(generate_vim_theme(p, name))

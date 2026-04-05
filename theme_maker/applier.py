@@ -9,11 +9,45 @@ from collections.abc import Callable
 from pathlib import Path
 
 from theme_maker.palette import get_gnome_accent_name
+from theme_maker.generators.icons import apply_icon_theme
+from theme_maker.generators.cursors import apply_cursor_theme
 
 
-def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+def _fast_copy(src: Path, dst: Path) -> None:
+    """Copy directory tree using rsync for speed, falling back to shutil."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        shutil.rmtree(dst)
+    rsync = shutil.which("rsync")
+    if rsync:
+        try:
+            subprocess.run(
+                [
+                    rsync,
+                    "-a",
+                    "--no-perms",
+                    "--no-owner",
+                    "--no-group",
+                    str(src) + "/",
+                    str(dst) + "/",
+                ],
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            shutil.copytree(src, dst, symlinks=False)
+    else:
+        shutil.copytree(src, dst, symlinks=False)
+
+
+def _run(
+    cmd: list[str], check: bool = True, timeout: int = 10
+) -> subprocess.CompletedProcess:
     """Run a command, suppressing stdout/stderr unless it fails."""
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, check=check, timeout=timeout
+    )
 
 
 def _gsettings_set(schema: str, key: str, value: str) -> bool:
@@ -190,8 +224,8 @@ def apply_terminal(output_dir: Path, name: str) -> list[str]:
         _copy_file(xres_src, home / ".Xresources")
         # Try to merge
         try:
-            _run(["xrdb", "-merge", str(home / ".Xresources")], check=False)
-        except FileNotFoundError:
+            _run(["xrdb", "-merge", str(home / ".Xresources")], check=False, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
         log.append("  Installed ~/.Xresources")
 
@@ -316,7 +350,7 @@ def apply_vscode(output_dir: Path, name: str) -> list[str]:
 
 
 def apply_antigravity(output_dir: Path, name: str) -> list[str]:
-    """Build VSIX and install Antigravity theme extension."""
+    """Install Antigravity theme extension by copying directly to extensions dir."""
     log: list[str] = []
     slug = name.lower().replace(" ", "-")
 
@@ -324,74 +358,54 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
     if not ag_src.exists():
         return log
 
-    # Check if antigravity binary exists
-    ag_bin = shutil.which("antigravity")
-    if not ag_bin:
-        log.append("  [SKIP] antigravity not found in PATH")
-        return log
+    # Antigravity stores extensions at ~/.antigravity/extensions/
+    home = Path.home()
+    ext_root = home / ".antigravity" / "extensions"
+    ext_root.mkdir(parents=True, exist_ok=True)
 
-    # Build VSIX in a temp directory
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-        ext_dir = tmp / "extension"
-        ext_themes = ext_dir / "themes"
-        ext_themes.mkdir(parents=True)
+    ext_dir = ext_root / f"{slug}-theme"
+    if ext_dir.exists():
+        shutil.rmtree(ext_dir)
+    ext_dir.mkdir(parents=True)
 
-        # Copy package.json and theme
-        pkg = ag_src / "package.json"
-        if pkg.exists():
-            _copy_file(pkg, ext_dir / "package.json")
+    # Copy package.json
+    pkg = ag_src / "package.json"
+    if pkg.exists():
+        _copy_file(pkg, ext_dir / "package.json")
 
-        themes_dir = ag_src / "themes"
-        if themes_dir.exists():
-            for f in themes_dir.iterdir():
-                _copy_file(f, ext_themes / f.name)
+    # Copy theme files
+    themes_src = ag_src / "themes"
+    if themes_src.exists():
+        themes_dst = ext_dir / "themes"
+        themes_dst.mkdir(parents=True, exist_ok=True)
+        for f in themes_src.iterdir():
+            if f.is_file():
+                _copy_file(f, themes_dst / f.name)
 
-        # Write [Content_Types].xml
-        (tmp / "[Content_Types].xml").write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
-            '  <Default Extension=".json" ContentType="application/json" />\n'
-            '  <Default Extension=".vsixmanifest" ContentType="text/xml" />\n'
-            "</Types>\n"
-        )
-
-        # Write extension.vsixmanifest
-        (tmp / "extension.vsixmanifest").write_text(
-            '<?xml version="1.0" encoding="utf-8"?>\n'
-            '<PackageManifest Version="2.0.0" '
-            'xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">\n'
-            "  <Metadata>\n"
-            f'    <Identity Language="en-US" Id="{slug}-theme" '
-            f'Version="1.0.0" Publisher="theme-maker" />\n'
-            f"    <DisplayName>{name}</DisplayName>\n"
-            "    <Description>Auto-generated dark theme</Description>\n"
-            "    <Categories>Themes</Categories>\n"
-            "  </Metadata>\n"
-            "  <Installation>"
-            '<InstallationTarget Id="Microsoft.VisualStudio.Code" />'
-            "</Installation>\n"
-            "  <Dependencies />\n"
-            "  <Assets>"
-            '<Asset Type="Microsoft.VisualStudio.Code.Manifest" '
-            'Path="extension/package.json" Addressable="true" />'
-            "</Assets>\n"
-            "</PackageManifest>\n"
-        )
-
-        # Create VSIX (zip)
-        vsix_path = tmp / f"{slug}-theme.vsix"
-        with zipfile.ZipFile(vsix_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file in tmp.rglob("*"):
-                if file.is_file() and file != vsix_path:
-                    zf.write(file, file.relative_to(tmp))
-
-        # Install
+    # Set the theme in Antigravity settings
+    settings_file = home / ".config" / "Antigravity" / "User" / "settings.json"
+    settings_data = {}
+    if settings_file.exists():
         try:
-            _run([ag_bin, "--install-extension", str(vsix_path)])
-            log.append(f"  Installed Antigravity extension via VSIX")
-        except subprocess.CalledProcessError as e:
-            log.append(f"  [WARN] Antigravity install failed: {e.stderr[:100]}")
+            settings_data = json.loads(settings_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Get display name from package.json
+    display_name = name
+    if pkg.exists():
+        try:
+            pkg_data = json.loads(pkg.read_text())
+            display_name = pkg_data.get("displayName", name)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    settings_data["workbench.colorTheme"] = display_name
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(json.dumps(settings_data, indent=4))
+
+    log.append(f"  Installed Antigravity theme: {slug}-theme")
+    log.append(f"  Set Antigravity color theme to: {display_name}")
 
     return log
 
@@ -463,6 +477,31 @@ def apply_kilo(output_dir: Path, name: str) -> list[str]:
     return log
 
 
+def apply_vim(output_dir: Path, name: str) -> list[str]:
+    """Install Vim color scheme to ~/.vim/colors/."""
+    log: list[str] = []
+    home = Path.home()
+    slug = name.lower().replace(" ", "_")
+
+    vim_src = output_dir / "editors" / "vim" / "colors" / f"{slug}.vim"
+    if not vim_src.exists():
+        return log
+
+    # Standard Vim
+    vim_colors = home / ".vim" / "colors"
+    vim_colors.mkdir(parents=True, exist_ok=True)
+    _copy_file(vim_src, vim_colors / f"{slug}.vim")
+    log.append(f"  Installed Vim colorscheme: {slug}")
+
+    # Neovim
+    nvim_colors = home / ".config" / "nvim" / "colors"
+    nvim_colors.mkdir(parents=True, exist_ok=True)
+    _copy_file(vim_src, nvim_colors / f"{slug}.vim")
+    log.append(f"  Installed Neovim colorscheme: {slug}")
+
+    return log
+
+
 def apply_fastfetch(output_dir: Path) -> list[str]:
     """Install fastfetch config."""
     log: list[str] = []
@@ -511,10 +550,13 @@ def apply_theme(
         ("Terminal", lambda: apply_terminal(output_dir, name)),
         ("Browsers", lambda: apply_browsers(output_dir, name)),
         ("VS Code", lambda: apply_vscode(output_dir, name)),
+        ("Vim", lambda: apply_vim(output_dir, name)),
         ("Antigravity", lambda: apply_antigravity(output_dir, name)),
         ("OpenCode", lambda: apply_opencode(output_dir, name)),
         ("Kilo Code", lambda: apply_kilo(output_dir, name)),
         ("Fastfetch", lambda: apply_fastfetch(output_dir)),
+        ("Icon Theme", lambda: apply_icon_theme(output_dir, name)),
+        ("Cursor Theme", lambda: apply_cursor_theme(output_dir, name)),
     ]
 
     for label, fn in steps:

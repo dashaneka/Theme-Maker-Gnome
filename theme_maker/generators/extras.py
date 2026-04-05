@@ -67,7 +67,7 @@ def generate_fastfetch_config(p: dict, wallpaper: str) -> str:
 
 
 def generate_install_md(name: str, p: dict) -> str:
-    slug = name.lower().replace(" ", "")
+    slug = name.lower().replace(" ", "-")
     palette_file = f"{slug}.palette"
     accent_name = get_gnome_accent_name(p["accent"])
 
@@ -84,6 +84,7 @@ Designed for Fedora + GNOME on Wayland.
 - [pywal](https://github.com/dylanaraps/pywal)
 - [Fastfetch](https://github.com/fastfetch-cli/fastfetch) + [chafa](https://hpjansson.org/chafa/)
 - [Papirus Icon Theme](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme)
+- [Bibata Cursor Theme](https://github.com/ful1e5/Bibata_Cursor)
 
 ---
 
@@ -263,6 +264,22 @@ Set theme inside Kilo with `Ctrl+X` then `t`, or edit `~/.local/state/kilo/kv.js
 ```bash
 mkdir -p ~/.config/fastfetch
 cp fastfetch/config.jsonc ~/.config/fastfetch/config.jsonc
+```
+
+## 16. Icon Theme
+
+```bash
+mkdir -p ~/.icons/{slug}
+cp -r icons/{slug}/* ~/.icons/{slug}/
+gsettings set org.gnome.desktop.interface icon-theme '{slug}'
+```
+
+## 17. Cursor Theme
+
+```bash
+mkdir -p ~/.icons/{slug}
+cp -r cursors/{slug}/* ~/.icons/{slug}/
+gsettings set org.gnome.desktop.interface cursor-theme '{slug}'
 ```
 
 ## Color Palette
