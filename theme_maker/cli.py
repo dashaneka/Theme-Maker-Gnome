@@ -2,9 +2,11 @@
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from theme_maker import __version__
@@ -22,7 +24,7 @@ from theme_maker.generators.editors import write_editor_files
 from theme_maker.generators.extras import write_extra_files
 from theme_maker.generators.icons import generate_icon_theme
 from theme_maker.generators.cursors import generate_cursor_theme
-from theme_maker.applier import apply_theme
+from theme_maker.applier import apply_theme, create_undo_backup, restore_theme
 
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
@@ -35,6 +37,32 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 CYAN = "\033[36m"
 WHITE = "\033[97m"
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Help formatter that preserves examples and shows defaults."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        help_text = action.help or ""
+        if "%(default)" in help_text:
+            return help_text
+        if action.default in (None, False, argparse.SUPPRESS):
+            return help_text
+        return f"{help_text} (default: %(default)s)"
+
+
+def _normalize_hex_color(value: str) -> str:
+    """Normalize a user-provided hex color and reject invalid values."""
+    color = value.strip()
+    if not color.startswith("#"):
+        color = "#" + color
+    if len(color) != 7:
+        raise ValueError("expected a 6-digit hex color like #c41e3a")
+    try:
+        int(color[1:], 16)
+    except ValueError as exc:
+        raise ValueError("expected a 6-digit hex color like #c41e3a") from exc
+    return color.lower()
 
 
 def _color_swatch(hexc: str) -> str:
@@ -348,6 +376,281 @@ def _detect_wallpaper() -> str | None:
     return None
 
 
+def _wallpaper_state(explicit_wallpaper: str | None) -> tuple[str | None, int | None]:
+    """Return the current wallpaper path plus a content-change signal."""
+    wallpaper = explicit_wallpaper or _detect_wallpaper()
+    if not wallpaper:
+        return (None, None)
+    path = Path(wallpaper).expanduser().resolve()
+    if not path.exists():
+        return (str(path), None)
+    try:
+        return (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        return (str(path), None)
+
+
+def _build_cli_args(args: argparse.Namespace, wallpaper: str) -> list[str]:
+    """Reconstruct a one-shot CLI invocation from the parsed args."""
+    build_args = [wallpaper, "--no-interactive", "--apply"]
+    if args.name:
+        build_args.extend(["--name", args.name])
+    if args.accent:
+        build_args.extend(["--accent", args.accent])
+    if args.output:
+        build_args.extend(["--output", args.output])
+    return build_args
+
+
+def _positive_int(value: str) -> int:
+    """Parse a positive integer for CLI options."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return parsed
+
+
+def _resolve_wallpaper_argument(args: argparse.Namespace) -> str | None:
+    """Resolve the wallpaper from positional and named forms."""
+    positional = getattr(args, "wallpaper", None)
+    named = getattr(args, "wallpaper_path", None)
+
+    if positional and named:
+        pos_path = str(Path(positional).expanduser().resolve())
+        named_path = str(Path(named).expanduser().resolve())
+        if pos_path != named_path:
+            raise ValueError(
+                "provide the wallpaper either positionally or with --wallpaper, not both"
+            )
+
+    return named or positional
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Create the CLI parser with grouped help and examples."""
+    epilog = """Examples:
+  theme-maker
+  theme-maker --wallpaper ~/Pictures/wallpaper.jpg --name MyTheme --apply
+  theme-maker ~/Pictures/wallpaper.jpg -a #2060c0 -y
+  theme-maker --restore
+  theme-maker --watch --apply
+"""
+    parser = argparse.ArgumentParser(
+        prog="theme-maker",
+        description="Theme Maker for GNOME - generate system-wide themes from wallpapers.",
+        formatter_class=_HelpFormatter,
+        epilog=epilog,
+    )
+
+    input_group = parser.add_argument_group("Input")
+    input_group.add_argument(
+        "wallpaper",
+        nargs="?",
+        help="Wallpaper image path (auto-detects if omitted)",
+    )
+    input_group.add_argument(
+        "-w",
+        "--wallpaper",
+        dest="wallpaper_path",
+        help="Wallpaper image path (named form; overrides the positional argument)",
+    )
+    input_group.add_argument(
+        "-n",
+        "--name",
+        "--theme-name",
+        dest="name",
+        help="Theme name (prompted if omitted)",
+    )
+    input_group.add_argument(
+        "-a",
+        "--accent",
+        help="Override accent color as hex (for example #c41e3a)",
+    )
+
+    output_group = parser.add_argument_group("Output")
+    output_group.add_argument(
+        "-o",
+        "--output",
+        help="Output directory (default: ~/<ThemeName>)",
+    )
+
+    actions = parser.add_argument_group("Actions")
+    actions.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the generated theme system-wide after writing files",
+    )
+    special = parser.add_mutually_exclusive_group()
+    special.add_argument(
+        "--backup",
+        action="store_true",
+        help="Back up the current theme state into a reusable template",
+    )
+    special.add_argument(
+        "--restore",
+        nargs="?",
+        const="__LAST__",
+        help="Restore the last saved theme state or a specific backup directory",
+    )
+    special.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check system readiness and theme tool dependencies",
+    )
+    special.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch wallpaper changes and regenerate/apply automatically",
+    )
+
+    actions.add_argument(
+        "--watch-interval",
+        type=_positive_int,
+        default=5,
+        metavar="SECONDS",
+        help="Wallpaper watcher poll interval in seconds",
+    )
+    actions.add_argument(
+        "-y",
+        "--yes",
+        "--no-interactive",
+        dest="no_interactive",
+        action="store_true",
+        help="Skip prompts and use defaults",
+    )
+    actions.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    return parser
+
+
+def _doctor_report() -> tuple[list[str], int]:
+    """Check runtime prerequisites and desktop state."""
+    log: list[str] = []
+    failures = 0
+
+    def ok(msg: str) -> None:
+        log.append(f"  [OK] {msg}")
+
+    def warn(msg: str) -> None:
+        log.append(f"  [WARN] {msg}")
+
+    def fail(msg: str) -> None:
+        nonlocal failures
+        failures += 1
+        log.append(f"  [FAIL] {msg}")
+
+    for mod in ["PIL", "numpy"]:
+        try:
+            __import__(mod)
+            ok(f"Python module available: {mod}")
+        except ImportError:
+            fail(f"Missing Python module: {mod}")
+
+    required_commands = [
+        "gsettings",
+        "gtk-update-icon-cache",
+        "git",
+        "magick",
+        "ctgen",
+    ]
+    optional_commands = ["rsync"]
+    for cmd in required_commands:
+        if shutil.which(cmd):
+            ok(f"Command available: {cmd}")
+        else:
+            fail(f"Missing required command: {cmd}")
+    for cmd in optional_commands:
+        if shutil.which(cmd):
+            ok(f"Optional command available: {cmd}")
+        else:
+            warn(f"Optional command missing: {cmd}")
+
+    xdg_desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").lower()
+    if "gnome" in xdg_desktop:
+        ok(f"GNOME desktop detected: {xdg_desktop}")
+    else:
+        warn(f"XDG_CURRENT_DESKTOP is {xdg_desktop or 'unset'}")
+
+    wallpaper = _detect_wallpaper()
+    if wallpaper:
+        ok(f"Wallpaper detected: {wallpaper}")
+    else:
+        warn("Wallpaper auto-detection failed")
+
+    for schema, key in [
+        ("org.gnome.desktop.interface", "gtk-theme"),
+        ("org.gnome.desktop.interface", "icon-theme"),
+        ("org.gnome.desktop.interface", "cursor-theme"),
+    ]:
+        try:
+            subprocess.run(
+                ["gsettings", "get", schema, key],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            ok(f"gsettings schema readable: {schema}.{key}")
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
+            warn(f"Could not read gsettings key: {schema}.{key}")
+
+    for target in [
+        Path.home() / ".themes",
+        Path.home() / ".icons",
+        Path.home() / ".config",
+    ]:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            ok(f"Writable path: {target}")
+        except OSError:
+            fail(f"Cannot write to {target}")
+
+    return log, failures
+
+
+def _watch_wallpaper(args: argparse.Namespace) -> int:
+    """Regenerate and apply the theme when the wallpaper changes."""
+    interval = max(2, getattr(args, "watch_interval", 5))
+    try:
+        explicit_wallpaper = _resolve_wallpaper_argument(args)
+    except ValueError as exc:
+        print(f"  {RED}Error:{RESET} {exc}")
+        return 1
+
+    last_state: tuple[str | None, int | None] | None = None
+    print(f"  Watching wallpaper changes every {interval}s...")
+    print()
+
+    while True:
+        current_path, current_sig = _wallpaper_state(explicit_wallpaper)
+        current_state = (current_path, current_sig)
+
+        if current_path and current_state != last_state:
+            print(f"  Wallpaper changed: {current_path}")
+            build_args = _build_cli_args(args, current_path)
+            result = main(build_args)
+            if result == 0:
+                last_state = current_state
+            print()
+
+        if current_path is None:
+            print("  Waiting for wallpaper...")
+
+        time.sleep(interval)
+
+
 def _generate_all(output_dir: Path, palette: dict, name: str, wallpaper: str) -> None:
     """Run all generators and write files to output_dir."""
     write_gtk_files(output_dir, palette, name)
@@ -388,12 +691,17 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=5,
             )
             value = result.stdout.strip().strip("'\"")
             if value and value != "''":
                 settings_data[f"{schema}.{key}"] = value
                 log.append(f"  Backed up: {schema}.{key} = {value}")
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             pass
 
     # Save settings to JSON
@@ -457,56 +765,46 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="theme-maker",
-        description="Theme Maker for GNOME - Generate system-wide themes from wallpapers.",
-    )
-    parser.add_argument(
-        "wallpaper",
-        nargs="?",
-        help="Path to wallpaper image (auto-detects if omitted)",
-    )
-    parser.add_argument(
-        "-n",
-        "--name",
-        help="Theme name (prompted if omitted)",
-    )
-    parser.add_argument(
-        "-a",
-        "--accent",
-        help="Override accent color as hex (e.g. #c41e3a)",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        help="Output directory (default: ~/<ThemeName>)",
-    )
-    parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Apply theme system-wide after generating",
-    )
-    parser.add_argument(
-        "--backup",
-        action="store_true",
-        help="Backup current theme as a reusable template",
-    )
-    parser.add_argument(
-        "--no-interactive",
-        action="store_true",
-        help="Skip all prompts, use defaults",
-    )
-    parser.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
-
+    parser = _build_parser()
     args = parser.parse_args(argv)
     interactive = not args.no_interactive
 
+    try:
+        wallpaper_arg = _resolve_wallpaper_argument(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     _print_header()
+
+    if args.doctor:
+        print(f"  {BOLD}Running doctor checks...{RESET}")
+        print()
+        logs, failures = _doctor_report()
+        for line in logs:
+            print(line)
+        print()
+        if failures:
+            print(f"  {RED}{BOLD}Doctor found {failures} issue(s).{RESET}")
+            return 1
+        print(f"  {GREEN}{BOLD}Doctor checks passed.{RESET}")
+        return 0
+
+    if args.restore is not None:
+        print(f"  {BOLD}Restoring theme state...{RESET}")
+        print()
+        restore_path = None if args.restore == "__LAST__" else Path(args.restore)
+        logs = restore_theme(restore_path)
+        for line in logs:
+            print(line)
+        print()
+        if any(line.startswith("  [FAIL]") for line in logs):
+            print(f"  {RED}{BOLD}Restore failed.{RESET}")
+            return 1
+        print(f"  {GREEN}{BOLD}Restore complete.{RESET}")
+        return 0
+
+    if args.watch:
+        return _watch_wallpaper(args)
 
     # ── Handle backup mode ────────────────────────────────────────────────
     if args.backup:
@@ -528,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # ── Step 1: Wallpaper ─────────────────────────────────────────────────
-    wallpaper = args.wallpaper
+    wallpaper = wallpaper_arg
 
     if not wallpaper:
         detected = _detect_wallpaper()
@@ -566,31 +864,33 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     # ── Step 3: Pick accent ───────────────────────────────────────────────
-    if args.accent:
-        accent = args.accent.strip()
-        if not accent.startswith("#"):
-            accent = "#" + accent
-        print(f"  {CYAN}Using provided accent:{RESET} {_color_swatch(accent)} {accent}")
-    else:
-        accent = pick_accent(extracted)
-        h, s, l = hex_to_hsl(accent)
-        gnome_name = get_gnome_accent_name(accent)
-        print(
-            f"  {CYAN}Best accent candidate:{RESET} "
-            f"{_color_swatch(accent)} {accent}  "
-            f"{DIM}(hue={h:.0f} sat={s:.0f} lum={l:.0f}, GNOME: {gnome_name}){RESET}"
-        )
+    try:
+        if args.accent:
+            accent = _normalize_hex_color(args.accent)
+            print(
+                f"  {CYAN}Using provided accent:{RESET} {_color_swatch(accent)} {accent}"
+            )
+        else:
+            accent = pick_accent(extracted)
+            h, s, l = hex_to_hsl(accent)
+            gnome_name = get_gnome_accent_name(accent)
+            print(
+                f"  {CYAN}Best accent candidate:{RESET} "
+                f"{_color_swatch(accent)} {accent}  "
+                f"{DIM}(hue={h:.0f} sat={s:.0f} lum={l:.0f}, GNOME: {gnome_name}){RESET}"
+            )
 
-        if interactive:
-            if not _prompt_yn("Use this accent color?"):
-                custom = _prompt_input("Enter accent hex (e.g. #c41e3a)")
-                if custom:
-                    accent = custom.strip()
-                    if not accent.startswith("#"):
-                        accent = "#" + accent
-                    print(
-                        f"  {CYAN}Using custom accent:{RESET} {_color_swatch(accent)} {accent}"
-                    )
+            if interactive:
+                if not _prompt_yn("Use this accent color?"):
+                    custom = _prompt_input("Enter accent hex (e.g. #c41e3a)")
+                    if custom:
+                        accent = _normalize_hex_color(custom)
+                        print(
+                            f"  {CYAN}Using custom accent:{RESET} {_color_swatch(accent)} {accent}"
+                        )
+    except ValueError as exc:
+        print(f"  {RED}Error:{RESET} Invalid accent color: {exc}")
+        return 1
 
     print()
 
@@ -650,6 +950,10 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(f"  {BOLD}Applying theme system-wide...{RESET}")
         print()
+        backup_dir, backup_logs = create_undo_backup(name)
+        print(f"  {DIM}Saved restore point: {backup_dir}{RESET}")
+        for line in backup_logs:
+            print(f"  {line}")
         logs = apply_theme(output_dir, name, palette, wallpaper)
         for line in logs:
             print(f"  {line}")

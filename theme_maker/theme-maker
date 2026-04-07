@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+APP_ROOT="${THEME_MAKER_HOME:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
+APP_SHARE="/usr/local/share/theme-maker"
+
+if [[ -d "$APP_SHARE/theme_maker" ]]; then
+  APP_ROOT="$APP_SHARE"
+fi
+
+export PYTHONPATH="$APP_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m theme_maker "$@"
