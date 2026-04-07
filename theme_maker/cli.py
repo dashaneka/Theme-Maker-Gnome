@@ -141,22 +141,210 @@ def _prompt_input(question: str, default: str = "") -> str:
 
 
 def _detect_wallpaper() -> str | None:
-    """Try to detect the current GNOME wallpaper from gsettings."""
-    for key in ["picture-uri-dark", "picture-uri"]:
+    """
+    Auto-detect current wallpaper from multiple sources.
+
+    Supports:
+    - GNOME (gsettings picture-uri-dark / picture-uri)
+    - KDE Plasma (kreadconfig5)
+    - XFCE (xfconf-query)
+    - MATE (gsettings)
+    - Cinnamon (gsettings)
+    - feh/nitrogen (common wallpaper setters)
+    - Fallback: recent files in common wallpaper directories
+    """
+    import urllib.parse
+
+    home = Path.home()
+
+    # ── Method 1: GNOME / GNOME-based (Fedora Workstation default) ────────────────
+    for schema, key in [
+        ("org.gnome.desktop.background", "picture-uri-dark"),
+        ("org.gnome.desktop.background", "picture-uri"),
+    ]:
         try:
             result = subprocess.run(
-                ["gsettings", "get", "org.gnome.desktop.background", key],
+                ["gsettings", "get", schema, key],
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=5,
             )
             uri = result.stdout.strip().strip("'\"")
             if uri.startswith("file://"):
-                uri = uri[7:]
+                uri = urllib.parse.unquote(uri[7:])  # Decode URL encoding (%20, etc.)
+            else:
+                uri = urllib.parse.unquote(uri)
+
             if uri and Path(uri).exists():
-                return uri
-        except (subprocess.CalledProcessError, FileNotFoundError):
+                return str(Path(uri).resolve())
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             continue
+
+    # ── Method 2: KDE Plasma ─────────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            [
+                "kreadconfig5",
+                "--file",
+                "kwinrc",
+                "--group",
+                "Wallpaper",
+                "--key",
+                "Image",
+                "--default",
+                "",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        wallpaper = result.stdout.strip()
+        if wallpaper:
+            # KDE stores as file:// or just path
+            if wallpaper.startswith("file://"):
+                wallpaper = urllib.parse.unquote(wallpaper[7:])
+            if Path(wallpaper).exists():
+                return str(Path(wallpaper).resolve())
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
+        pass
+
+    # ── Method 3: XFCE ────────────────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            [
+                "xfconf-query",
+                "-c",
+                "xfce4-desktop",
+                "-p",
+                "/backdrop/screen0/monitor0/workspace0/last-image",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        wallpaper = result.stdout.strip()
+        if wallpaper and Path(wallpaper).exists():
+            return str(Path(wallpaper).resolve())
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
+        pass
+
+    # ── Method 4: MATE ─────────────────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            ["gsettings", "get", "org.mate.desktop.background", "picture-uri"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        uri = result.stdout.strip().strip("'\"")
+        if uri.startswith("file://"):
+            uri = urllib.parse.unquote(uri[7:])
+        if uri and Path(uri).exists():
+            return str(Path(uri).resolve())
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
+        pass
+
+    # ── Method 5: Cinnamon ─────────────────────────────────────────────────────────
+    try:
+        result = subprocess.run(
+            ["gsettings", "get", "org.cinnamon.desktop.background", "picture-uri"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        uri = result.stdout.strip().strip("'\"")
+        if uri.startswith("file://"):
+            uri = urllib.parse.unquote(uri[7:])
+        if uri and Path(uri).exists():
+            return str(Path(uri).resolve())
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
+        pass
+
+    # ── Method 6: feh (common lightweight wallpaper setter) ───────────────────────
+    fehbg = home / ".fehbg"
+    if fehbg.exists():
+        try:
+            content = fehbg.read_text()
+            # Parse: feh --no-fehbg --bg-fill '/path/to/wallpaper.jpg'
+            if "'" in content:
+                path = content.split("'")[1]
+                if Path(path).exists():
+                    return str(Path(path).resolve())
+        except (IndexError, OSError):
+            pass
+
+    # ── Method 7: nitrogen (another wallpaper setter) ───────────────────────────────
+    nitrogen_cfg = home / ".config" / "nitrogen" / "bg-saved.cfg"
+    if nitrogen_cfg.exists():
+        try:
+            content = nitrogen_cfg.read_text()
+            for line in content.split("\n"):
+                if line.startswith("file="):
+                    path = line[5:]
+                    if Path(path).exists():
+                        return str(Path(path).resolve())
+        except (IndexError, OSError):
+            pass
+
+    # ── Method 8: Fallback - find most recent wallpaper in common dirs ─────────────
+    common_dirs = [
+        home / ".local" / "share" / "backgrounds",  # GNOME default (Fedora)
+        home / "Pictures" / "Wallpapers",
+        home / "Pictures" / "Wallpaper",
+        home / "Wallpapers",
+        home / "Pictures",
+        Path("/usr/share/backgrounds"),  # System wallpapers
+        Path("/usr/share/backgrounds/gnome"),
+        Path("/usr/share/backgrounds/fedora"),
+    ]
+
+    image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+    candidates: list[tuple[Path, float]] = []
+
+    for directory in common_dirs:
+        if directory.exists():
+            try:
+                for f in directory.iterdir():
+                    if f.is_file() and f.suffix.lower() in image_extensions:
+                        # Get modification time for recency sorting
+                        try:
+                            mtime = f.stat().st_mtime
+                            candidates.append((f, mtime))
+                        except OSError:
+                            continue
+            except PermissionError:
+                continue
+
+    # Return the most recently modified wallpaper
+    if candidates:
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return str(candidates[0][0].resolve())
+
     return None
 
 
@@ -175,11 +363,11 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
     """Backup current theme settings as a reusable template."""
     log: list[str] = []
     home = Path.home()
-    
+
     # Create backup directory
     backup_dir = output_dir / "backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Backup gsettings
     settings_to_backup = [
         ("org.gnome.desktop.interface", "gtk-theme"),
@@ -191,7 +379,7 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
         ("org.gnome.desktop.background", "picture-uri"),
         ("org.gnome.desktop.background", "picture-uri-dark"),
     ]
-    
+
     settings_data = {}
     for schema, key in settings_to_backup:
         try:
@@ -207,12 +395,12 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
                 log.append(f"  Backed up: {schema}.{key} = {value}")
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
-    
+
     # Save settings to JSON
     settings_file = backup_dir / "settings.json"
     settings_file.write_text(json.dumps(settings_data, indent=2))
     log.append(f"  Saved settings to {settings_file}")
-    
+
     # Backup GTK config files
     gtk_configs = [
         (home / ".config" / "gtk-3.0" / "settings.ini", "gtk3-settings.ini"),
@@ -220,20 +408,20 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
         (home / ".config" / "gtk-3.0" / "gtk.css", "gtk3.css"),
         (home / ".config" / "gtk-4.0" / "gtk.css", "gtk4.css"),
     ]
-    
+
     for src, dst_name in gtk_configs:
         if src.exists():
             dst = backup_dir / dst_name
             shutil.copy2(src, dst)
             log.append(f"  Backed up: {src} -> {dst}")
-    
+
     # Backup theme directories
     # NOTE: These can be large (hundreds of MB), so we warn the user.
     theme_dirs = [
         (home / ".themes", "themes"),
         (home / ".icons", "icons"),
     ]
-    
+
     for src_dir, dst_name in theme_dirs:
         if src_dir.exists():
             dst = backup_dir / dst_name
@@ -244,7 +432,7 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
                 log.append(f"  Backed up: {src_dir} -> {dst}")
             except (OSError, shutil.Error) as e:
                 log.append(f"  [WARN] Failed to backup {src_dir}: {e}")
-    
+
     # Create backup manifest
     manifest = {
         "name": "Theme Backup",
@@ -260,11 +448,11 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
             "icons/",
         ],
     }
-    
+
     manifest_file = backup_dir / "manifest.json"
     manifest_file.write_text(json.dumps(manifest, indent=2))
     log.append(f"  Created manifest: {manifest_file}")
-    
+
     return log
 
 
@@ -324,15 +512,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.backup:
         print(f"  {BOLD}Backing up current theme...{RESET}")
         print()
-        
+
         output = args.output or str(Path.home() / "ThemeBackup")
         output_dir = Path(output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         logs = _backup_current_theme(output_dir)
         for line in logs:
             print(f"  {line}")
-        
+
         print()
         print(f"  {GREEN}{BOLD}Backup complete!{RESET}")
         print(f"  {DIM}Backup saved to {output_dir}{RESET}")
