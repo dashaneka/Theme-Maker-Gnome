@@ -1,5 +1,6 @@
 """Icon theme generator - recolors Papirus folders for any accent color."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -17,9 +18,7 @@ def _recolor_svg(svg_content: str, target_color: str) -> str:
     accent_bg = _hsl_to_hex(h, max(s - 30, 0), max(l - 25, 0))
 
     replacements = [
-        ("#e25252", accent),
-        ("#f5542b", accent),
-        ("#c44322", accent_dark),
+        # Core folder base colors (Papirus reds/oranges)
         ("#d35f5f", accent),
         ("#e85d5d", accent),
         ("#f06292", accent),
@@ -30,13 +29,36 @@ def _recolor_svg(svg_content: str, target_color: str) -> str:
         ("#b71c1c", accent_bg),
         ("#ff5252", accent),
         ("#ff1744", accent),
+        ("#d50000", accent_dark),
         ("#f44336", accent),
         ("#e57373", accent_light),
         ("#ef9a9a", accent_light),
         ("#ffcdd2", accent_light),
         ("#ff8a80", accent_light),
         ("#ff867c", accent),
-        ("#d50000", accent_dark),
+        # Pink/magenta Papirus folder variants
+        ("#c51162", accent_dark),
+        ("#f50057", accent),
+        ("#ff4081", accent),
+        ("#ff80ab", accent_light),
+        # Purple Papirus folder variants
+        ("#ea80fc", accent_light),
+        ("#e040fb", accent),
+        ("#d500f9", accent),
+        ("#aa00ff", accent_dark),
+        ("#e1bee7", accent_light),
+        ("#ce93d8", accent_light),
+        ("#ba68c8", accent),
+        ("#ab47bc", accent),
+        ("#9c27b0", accent_dark),
+        ("#8e24aa", accent_dark),
+        ("#7b1fa2", accent_bg),
+        ("#6a1b9a", accent_bg),
+        ("#4a148c", accent_bg),
+        # Blue/Green/Orange/Yellow variants
+        ("#e25252", accent),
+        ("#f5542b", accent),
+        ("#c44322", accent_dark),
         ("#e24f51", accent),
         ("#a30002", accent_bg),
         ("#5294e2", accent),
@@ -63,23 +85,6 @@ def _recolor_svg(svg_content: str, target_color: str) -> str:
         ("#fdd285", accent_light),
         ("#7e57c2", accent),
         ("#ca71df", accent_light),
-        ("#e040fb", accent),
-        ("#d500f9", accent),
-        ("#aa00ff", accent_dark),
-        ("#e1bee7", accent_light),
-        ("#ce93d8", accent_light),
-        ("#ba68c8", accent),
-        ("#ab47bc", accent),
-        ("#9c27b0", accent_dark),
-        ("#8e24aa", accent_dark),
-        ("#7b1fa2", accent_bg),
-        ("#6a1b9a", accent_bg),
-        ("#4a148c", accent_bg),
-        ("#ea80fc", accent_light),
-        ("#c51162", accent_dark),
-        ("#f50057", accent),
-        ("#ff4081", accent),
-        ("#ff80ab", accent_light),
         ("#45abb7", accent),
         ("#16a085", accent_dark),
         ("#00bcd4", accent),
@@ -139,6 +144,7 @@ def generate_icon_theme(output_dir: Path, palette: dict, name: str) -> None:
     """Generate a custom icon theme that inherits Papirus-Dark with recolored folders."""
     slug = name.lower().replace(" ", "-")
     accent = palette["accent"]
+    recolor_cache: dict[tuple[Path, str], str] = {}
 
     papirus_src = None
     for candidate in [
@@ -223,27 +229,36 @@ Directories={dirs_line}
 
         dst_places = icon_dir / size / "places"
         dst_places.mkdir(parents=True, exist_ok=True)
+        alias_targets: dict[tuple[Path, str, bool], Path] = {}
 
         # Copy only folder and user SVGs
         for svg_path in src_places.glob("folder*.svg"):
-            _copy_and_recolor_folder(svg_path, dst_places / svg_path.name, accent)
+            _copy_and_recolor_folder(
+                svg_path,
+                dst_places / svg_path.name,
+                accent,
+                recolor_cache,
+                alias_targets,
+            )
             modified_count += 1
         for svg_path in src_places.glob("user*.svg"):
-            _copy_and_recolor_folder(svg_path, dst_places / svg_path.name, accent)
+            _copy_and_recolor_folder(
+                svg_path,
+                dst_places / svg_path.name,
+                accent,
+                recolor_cache,
+                alias_targets,
+            )
             modified_count += 1
 
-    try:
-        subprocess.run(
-            ["gtk-update-icon-cache", "-f", str(icon_dir)],
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
 
-
-def _copy_and_recolor_folder(src: Path, dst: Path, accent: str) -> None:
+def _copy_and_recolor_folder(
+    src: Path,
+    dst: Path,
+    accent: str,
+    recolor_cache: dict[tuple[Path, str], str],
+    alias_targets: dict[tuple[Path, str, bool], Path],
+) -> None:
     """Copy a folder SVG and recolor it."""
     # If it's a symlink, follow it
     if src.is_symlink():
@@ -256,15 +271,22 @@ def _copy_and_recolor_folder(src: Path, dst: Path, accent: str) -> None:
         else:
             return
     else:
+        real_src = src
         try:
             content = src.read_text(errors="ignore")
         except (OSError, UnicodeDecodeError):
             return
 
-    recolored = _recolor_svg(content, accent)
+    cache_key = (real_src, accent)
+    recolored = recolor_cache.get(cache_key)
+    if recolored is None:
+        recolored = _recolor_svg(content, accent)
+        recolor_cache[cache_key] = recolored
+
+    needs_text_override = dst.name == "folder.svg" or dst.name.startswith("user-")
 
     # For default folder SVGs using ColorScheme-Text for fill, replace grey with accent
-    if dst.name == "folder.svg" or dst.name.startswith("user-"):
+    if needs_text_override:
         recolored = re.sub(
             r"\.ColorScheme-Text\s*\{\s*color:#[0-9a-fA-F]+\s*\}",
             f".ColorScheme-Text {{ color:{accent} }}",
@@ -273,7 +295,16 @@ def _copy_and_recolor_folder(src: Path, dst: Path, accent: str) -> None:
         recolored = recolored.replace("#dfdfdf", accent)
         recolored = recolored.replace("#DFDFDF", accent)
 
+    alias_key = (real_src, accent, needs_text_override)
+    primary_dst = alias_targets.get(alias_key)
+    if primary_dst and primary_dst.exists() and primary_dst != dst:
+        relative_target = Path(os.path.relpath(primary_dst, start=dst.parent))
+        if relative_target != Path(dst.name):
+            dst.symlink_to(relative_target)
+            return
+
     dst.write_text(recolored)
+    alias_targets[alias_key] = dst
 
 
 def apply_icon_theme(output_dir: Path, name: str) -> list[str]:
@@ -331,7 +362,13 @@ def apply_icon_theme(output_dir: Path, name: str) -> list[str]:
 
     try:
         subprocess.run(
-            ["gsettings", "set", "org.gnome.desktop.interface", "icon-theme", slug],
+            [
+                "gsettings",
+                "set",
+                "org.gnome.desktop.interface",
+                "icon-theme",
+                f"'{slug}'",
+            ],
             capture_output=True,
             text=True,
             check=True,

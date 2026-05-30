@@ -259,14 +259,28 @@ cp editors/kilo/{slug}.json ~/.config/kilo/themes/
 
 Set theme inside Kilo with `Ctrl+X` then `t`, or edit `~/.local/state/kilo/kv.json`.
 
-## 15. Fastfetch
+## 15. Codex CLI
+
+```bash
+mkdir -p ~/.codex/themes
+cp editors/codex/{slug}.tmTheme ~/.codex/themes/
+```
+
+Then set this in `~/.codex/config.toml`:
+
+```toml
+[tui]
+theme = "{slug}"
+```
+
+## 16. Fastfetch
 
 ```bash
 mkdir -p ~/.config/fastfetch
 cp fastfetch/config.jsonc ~/.config/fastfetch/config.jsonc
 ```
 
-## 16. Icon Theme
+## 17. Icon Theme
 
 ```bash
 mkdir -p ~/.icons/{slug}
@@ -274,7 +288,7 @@ cp -r icons/{slug}/* ~/.icons/{slug}/
 gsettings set org.gnome.desktop.interface icon-theme '{slug}'
 ```
 
-## 17. Cursor Theme
+## 18. Cursor Theme
 
 ```bash
 mkdir -p ~/.icons/{slug}

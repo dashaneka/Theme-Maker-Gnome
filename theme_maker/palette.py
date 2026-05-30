@@ -161,7 +161,7 @@ def pick_accent(colors: list[str]) -> str:
     return scored[0][1]
 
 
-def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str]:
+def generate_palette(accent_hex: str, wallpaper_path: str = "", mode: str = "dark") -> dict[str, str]:
     """Generate a complete theme palette from an accent color."""
     ah, a_s, al = hex_to_hsl(accent_hex)
 
@@ -175,23 +175,36 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
     accent = hsl_to_hex(ah, a_s, al)
 
     # ── Background tiers (dark, tinted with accent hue) ──
-    bg_deepest = hsl_to_hex(ah, max(3, a_s * 0.05), 3)
-    bg_main = hsl_to_hex(ah, max(5, a_s * 0.08), 5.5)
-    bg_surface = hsl_to_hex(ah, max(8, a_s * 0.12), 8.5)
-    bg_elevated = hsl_to_hex(ah, max(12, a_s * 0.15), 12)
-    border = hsl_to_hex(ah, max(15, a_s * 0.2), 17)
-    border_bright = hsl_to_hex(ah, max(15, a_s * 0.2), 22)
+    if mode == "light":
+        bg_deepest = hsl_to_hex(ah, max(2, a_s * 0.04), 98)
+        bg_main = hsl_to_hex(ah, max(3, a_s * 0.05), 95)
+        bg_surface = hsl_to_hex(ah, max(5, a_s * 0.08), 92)
+        bg_elevated = hsl_to_hex(ah, max(8, a_s * 0.12), 88)
+        border = hsl_to_hex(ah, max(12, a_s * 0.15), 80)
+        border_bright = hsl_to_hex(ah, max(15, a_s * 0.2), 70)
+        
+        text = hsl_to_hex(ah, max(3, a_s * 0.06), 15)
+        text_muted = hsl_to_hex(ah, max(4, a_s * 0.08), 35)
+        text_dim = hsl_to_hex(ah, max(5, a_s * 0.1), 50)
+        insensitive_bg = hsl_to_hex(ah, max(5, a_s * 0.06), 90)
+    else:
+        bg_deepest = hsl_to_hex(ah, max(2, a_s * 0.04), 1)      # nearly pure black
+        bg_main = hsl_to_hex(ah, max(3, a_s * 0.05), 2.5)       # slightly raised
+        bg_surface = hsl_to_hex(ah, max(5, a_s * 0.08), 4.5)    # surfaces (like popups)
+        bg_elevated = hsl_to_hex(ah, max(8, a_s * 0.12), 7.5)   # buttons/cards
+        border = hsl_to_hex(ah, max(12, a_s * 0.15), 11)        # default borders
+        border_bright = hsl_to_hex(ah, max(15, a_s * 0.2), 16)  # focused borders
+        
+        text = hsl_to_hex(ah, max(3, a_s * 0.06), 90)
+        text_muted = hsl_to_hex(ah, max(4, a_s * 0.08), 63)
+        text_dim = hsl_to_hex(ah, max(5, a_s * 0.1), 38)
+        insensitive_bg = hsl_to_hex(ah, max(5, a_s * 0.06), 7)
 
     # ── Accent variants ──
     accent_hover = hsl_to_hex(ah, min(100, a_s + 5), min(65, al + 8))
     accent_light = hsl_to_hex(ah, min(100, a_s + 10), min(70, al + 12))
     accent_soft = hsl_to_hex((ah + 15) % 360, max(30, a_s * 0.6), al)
     accent_rose = hsl_to_hex(ah, max(40, a_s * 0.7), min(75, al + 20))
-
-    # ── Text colors (slightly warm-tinted) ──
-    text = hsl_to_hex(ah, max(3, a_s * 0.06), 90)
-    text_muted = hsl_to_hex(ah, max(4, a_s * 0.08), 63)
-    text_dim = hsl_to_hex(ah, max(5, a_s * 0.1), 38)
 
     # ── Semantic colors ──
     green = hsl_to_hex(130, 50, 46)
@@ -202,7 +215,6 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
     cyan = hsl_to_hex(175, 40, 48)
 
     # ── Insensitive / disabled ──
-    insensitive_bg = hsl_to_hex(ah, max(5, a_s * 0.06), 7)
     insensitive_fg = text_dim
 
     # ── Warning uses actual yellow-amber only for semantics ──
@@ -210,7 +222,7 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
 
     # ── ANSI terminal colors ──
     ansi = {}
-    ansi["black"] = hsl_to_hex(ah, max(3, a_s * 0.05), 5)
+    ansi["black"] = hsl_to_hex(ah, max(3, a_s * 0.05), 15 if mode == "light" else 2)
     ansi["red"] = accent
     ansi["green"] = green
     # Yellow slot uses a shifted accent variant (avoid clashing orange)
@@ -220,7 +232,7 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
     ansi["cyan"] = cyan
     ansi["white"] = text_muted
 
-    ansi["bright_black"] = border
+    ansi["bright_black"] = border if mode == "dark" else hsl_to_hex(ah, max(3, a_s * 0.05), 45)
     ansi["bright_red"] = accent_light
     ansi["bright_green"] = lighten(green, 8)
     ansi["bright_yellow"] = accent_rose
@@ -230,9 +242,19 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
     ansi["bright_white"] = lighten(text, 3)
 
     # ── Deep maroon (for subtle uses) ──
-    deep_maroon = hsl_to_hex(ah, max(30, a_s * 0.5), 20)
+    deep_maroon = hsl_to_hex(ah, max(30, a_s * 0.5), 80 if mode == "light" else 20)
+
+    # ── Foreground calculations for contrasting text ──
+    def get_fg(hex_c: str) -> str:
+        r, g, b = hex_to_rgb(hex_c)
+        return "#ffffff" if (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5 else "#000000"
+
+    accent_fg = get_fg(accent)
+    accent_light_fg = get_fg(accent_light)
+    green_fg = get_fg(green)
 
     return {
+        "mode": mode,
         "wallpaper": wallpaper_path,
         "bg_deepest": bg_deepest,
         "bg_main": bg_main,
@@ -272,6 +294,9 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "") -> dict[str, str
         "ansi_bright_magenta": ansi["bright_magenta"],
         "ansi_bright_cyan": ansi["bright_cyan"],
         "ansi_bright_white": ansi["bright_white"],
+        "accent_fg": accent_fg,
+        "accent_light_fg": accent_light_fg,
+        "green_fg": green_fg,
     }
 
 

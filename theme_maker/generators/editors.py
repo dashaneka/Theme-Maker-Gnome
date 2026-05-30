@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from xml.sax.saxutils import escape
 from theme_maker.palette import darken, hex_to_rgb
 
 
@@ -26,7 +27,7 @@ def _hex_to_256(hex_color: str) -> int:
 def generate_vscode_theme(p: dict, name: str) -> str:
     data = {
         "name": name,
-        "type": "dark",
+        "type": p.get("mode", "dark"),
         "semanticHighlighting": True,
         "colors": {
             "editor.background": p["bg_main"],
@@ -56,7 +57,7 @@ def generate_vscode_theme(p: dict, name: str) -> str:
             "activityBar.inactiveForeground": p["text_dim"],
             "activityBar.border": p["border"] + "40",
             "activityBarBadge.background": p["accent"],
-            "activityBarBadge.foreground": "#ffffff",
+            "activityBarBadge.foreground": p["accent_fg"],
             "sideBar.background": p["bg_surface"],
             "sideBar.foreground": p["text"],
             "sideBar.border": p["border"] + "40",
@@ -74,12 +75,12 @@ def generate_vscode_theme(p: dict, name: str) -> str:
             "statusBar.foreground": p["text_muted"],
             "statusBar.border": p["border"] + "40",
             "statusBar.debuggingBackground": p["accent"],
-            "statusBar.debuggingForeground": "#ffffff",
+            "statusBar.debuggingForeground": p["accent_fg"],
             "statusBar.noFolderBackground": p["bg_elevated"],
             "statusBarItem.activeBackground": p["accent"] + "40",
             "statusBarItem.hoverBackground": p["accent"] + "25",
             "statusBarItem.prominentBackground": p["accent"],
-            "statusBarItem.prominentForeground": "#ffffff",
+            "statusBarItem.prominentForeground": p["accent_fg"],
             "titleBar.activeBackground": p["bg_main"],
             "titleBar.activeForeground": p["text"],
             "titleBar.inactiveBackground": p["bg_main"],
@@ -130,13 +131,13 @@ def generate_vscode_theme(p: dict, name: str) -> str:
             "dropdown.foreground": p["text"],
             "dropdown.border": p["border"] + "80",
             "button.background": p["accent"],
-            "button.foreground": "#ffffff",
+            "button.foreground": p["accent_fg"],
             "button.hoverBackground": p["accent_hover"],
             "button.secondaryBackground": p["bg_elevated"],
             "button.secondaryForeground": p["text"],
             "button.secondaryHoverBackground": p["border"],
             "badge.background": p["accent"],
-            "badge.foreground": "#ffffff",
+            "badge.foreground": p["accent_fg"],
             "scrollbar.shadow": "#00000050",
             "scrollbarSlider.background": p["text_dim"] + "50",
             "scrollbarSlider.hoverBackground": p["accent"] + "80",
@@ -539,6 +540,160 @@ def generate_opencode_theme(p: dict, name: str) -> str:
     return json.dumps(data, indent=2)
 
 
+def generate_codex_tmtheme(p: dict, name: str) -> str:
+    """Generate a TextMate theme for Codex TUI syntax highlighting."""
+    theme_name = escape(name)
+    settings = [
+        (
+            "",
+            {
+                "background": p["bg_deepest"],
+                "foreground": p["text"],
+                "caret": p["accent"],
+                "invisibles": p["border"],
+                "lineHighlight": p["bg_main"],
+                "selection": p["accent"] + "40",
+                "gutterBackground": p["bg_deepest"],
+                "gutterForeground": p["text_dim"],
+            },
+        ),
+        (
+            "comment, punctuation.definition.comment, comment.line.number-sign, comment.block.documentation",
+            {"foreground": p["text_dim"], "fontStyle": "italic"},
+        ),
+        (
+            "string, string.quoted, string.template, string.unquoted.heredoc, string.interpolated",
+            {"foreground": p["accent_rose"]},
+        ),
+        (
+            "constant.numeric, constant.language.boolean, constant.numeric.integer, constant.numeric.float",
+            {"foreground": p["accent_hover"]},
+        ),
+        (
+            "constant.language, constant.character, constant.other, constant.character.escape",
+            {"foreground": p["accent_hover"]},
+        ),
+        (
+            "variable, variable.other, variable.parameter, meta.definition.variable",
+            {"foreground": p["text"]},
+        ),
+        (
+            "variable.language.this, variable.language.self, variable.language.special",
+            {"foreground": p["accent"], "fontStyle": "italic"},
+        ),
+        (
+            "keyword, keyword.control, storage, storage.type, storage.modifier, keyword.declaration, keyword.other.special-method",
+            {"foreground": p["accent"]},
+        ),
+        (
+            "keyword.operator, punctuation.accessor, punctuation.separator.key-value",
+            {"foreground": p["accent_soft"]},
+        ),
+        (
+            "entity.name.function, support.function, meta.function-call, entity.name.method, variable.function",
+            {"foreground": p["cyan"]},
+        ),
+        (
+            "entity.name.class, entity.name.type, support.class, support.type, entity.name.struct, entity.name.enum",
+            {"foreground": p["accent_rose"]},
+        ),
+        (
+            "entity.name.namespace, entity.name.module, support.module",
+            {"foreground": p["magenta"]},
+        ),
+        ("entity.name.tag", {"foreground": p["accent"]}),
+        (
+            "entity.other.attribute-name, entity.other.attribute-name.class.css, entity.other.attribute-name.id.css",
+            {"foreground": p["accent_hover"], "fontStyle": "italic"},
+        ),
+        (
+            "variable.other.property, support.type.property-name.css, support.type.property-name.json, meta.object-literal.key",
+            {"foreground": p["text_muted"]},
+        ),
+        (
+            "support.constant, support.variable, support.type.primitive, support.type.builtin",
+            {"foreground": p["blue"]},
+        ),
+        ("punctuation, meta.brace, meta.delimiter", {"foreground": p["text_dim"]}),
+        ("punctuation.definition.string", {"foreground": p["accent_rose"]}),
+        ("string.regexp, constant.other.character-class.regexp", {"foreground": p["magenta"]}),
+        (
+            "markup.heading, markdown.heading, entity.name.section.markdown",
+            {"foreground": p["accent"], "fontStyle": "bold"},
+        ),
+        ("markup.bold", {"foreground": p["accent_rose"], "fontStyle": "bold"}),
+        (
+            "markup.italic, markup.quote, punctuation.definition.quote.begin.markdown",
+            {"foreground": p["accent_soft"], "fontStyle": "italic"},
+        ),
+        (
+            "markup.inline.raw, markup.fenced_code, markup.raw.block, markup.raw.inline",
+            {"foreground": p["cyan"]},
+        ),
+        (
+            "markup.underline.link, string.other.link, markup.link, markup.link.text",
+            {"foreground": p["accent"]},
+        ),
+        (
+            "markup.list, punctuation.definition.list.begin.markdown",
+            {"foreground": p["accent_hover"]},
+        ),
+        (
+            "markup.inserted, diff.inserted, meta.diff.header.from-file",
+            {"foreground": p["green"]},
+        ),
+        (
+            "markup.deleted, diff.deleted, meta.diff.header.to-file",
+            {"foreground": p["accent_light"]},
+        ),
+        (
+            "markup.changed, diff.changed, meta.diff.range",
+            {"foreground": p["accent_hover"]},
+        ),
+        (
+            "meta.separator, punctuation.section.embedded, punctuation.separator.continuation",
+            {"foreground": p["border_bright"]},
+        ),
+        (
+            "source.shell, meta.prompt, entity.name.tag.prompt, constant.other.prompt",
+            {"foreground": p["green"]},
+        ),
+        (
+            "invalid, invalid.illegal, invalid.deprecated",
+            {"foreground": p["accent_light"], "fontStyle": "underline"},
+        ),
+    ]
+
+    entries: list[str] = []
+    for scope, values in settings:
+        pairs = []
+        if scope:
+            pairs.append(
+                f"        <key>scope</key>\n        <string>{escape(scope)}</string>"
+            )
+        pairs.append("        <key>settings</key>")
+        pairs.append("        <dict>")
+        for key, value in values.items():
+            pairs.append(f"          <key>{escape(key)}</key>")
+            pairs.append(f"          <string>{escape(value)}</string>")
+        pairs.append("        </dict>")
+        entries.append("      <dict>\n" + "\n".join(pairs) + "\n      </dict>")
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>name</key>
+  <string>{theme_name}</string>
+  <key>settings</key>
+  <array>
+{chr(10).join(entries)}
+  </array>
+</dict>
+</plist>
+"""
+
+
 def generate_vim_theme(p: dict, name: str) -> str:
     """Generate a Vim color scheme in .vim format."""
     slug = name.lower().replace(" ", "_")
@@ -564,9 +719,9 @@ def generate_vim_theme(p: dict, name: str) -> str:
 
     return f"""" {name} - Auto-generated Vim color scheme
 " Maintainer: Theme Maker for GNOME
-" Background: dark
+" Background: {p.get("mode", "dark")}
 
-set background=dark
+set background={p.get("mode", "dark")}
 hi clear
 if exists("syntax_on")
   syntax reset
@@ -600,16 +755,19 @@ hi VertSplit guifg={p["border"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_di
 " Tabs
 hi TabLine guifg={p["text_muted"]} guibg={p["bg_main"]} ctermfg={cterm["text_muted"]} ctermbg={cterm["bg"]} gui=none
 hi TabLineFill guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]} gui=none
-hi TabLineSel guifg={p["text"]} guibg={p["bg_surface"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg_surface"]} gui=bold
+hi TabLineSel guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]} gui=bold
 
 " Search and match
-hi Search guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]}
-hi IncSearch guifg={p["bg_deepest"]} guibg={p["accent_rose"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent_rose"]}
-hi MatchParen guifg={p["accent"]} guibg=none ctermfg={cterm["accent"]} ctermbg=none gui=bold
+hi Search guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]} gui=bold
+hi IncSearch guifg={p["bg_deepest"]} guibg={p["accent_rose"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent_rose"]} gui=bold
+hi MatchParen guifg={p["accent_light"]} guibg=NONE ctermfg={cterm["accent"]} ctermbg=NONE gui=bold,underline
 
 " Selection
-hi Visual guibg={p["accent"]}40 ctermbg={cterm["accent"]} gui=none
-hi VisualNOS guibg={p["accent"]}30 ctermbg={cterm["accent"]} gui=none
+hi Visual guibg={p["accent"]} ctermbg={cterm["accent"]} gui=none
+hi VisualNOS guibg={p["bg_elevated"]} ctermbg={cterm["bg_elevated"]} gui=none
+if has("nvim")
+  hi Visual blend=20
+endif
 
 " Folded text
 hi Folded guifg={p["text_muted"]} guibg={p["bg_surface"]} ctermfg={cterm["text_muted"]} ctermbg={cterm["bg_surface"]}
@@ -617,7 +775,7 @@ hi FoldColumn guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text
 
 " Pop-up menu
 hi Pmenu guifg={p["text"]} guibg={p["bg_surface"]} ctermfg={cterm["fg"]} ctermbg={cterm["bg_surface"]}
-hi PmenuSel guifg={p["text"]} guibg={p["accent"]}30 ctermfg={cterm["fg"]} ctermbg={cterm["accent"]}
+hi PmenuSel guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ctermbg={cterm["accent"]} gui=bold
 hi PmenuSbar guibg={p["bg_elevated"]} ctermbg={cterm["bg_elevated"]}
 hi PmenuThumb guibg={p["accent"]} ctermbg={cterm["accent"]}
 
@@ -626,25 +784,26 @@ hi WildMenu guifg={p["bg_deepest"]} guibg={p["accent"]} ctermfg={cterm["bg"]} ct
 
 " Sign column (for gitgutter, diagnostics)
 hi SignColumn guifg={p["text_dim"]} guibg={p["bg_deepest"]} ctermfg={cterm["text_dim"]} ctermbg={cterm["bg"]}
+hi ColorColumn guibg={p["bg_main"]} ctermbg={cterm["bg"]}
 
 " Gutter
-hi GitGutterAdd guifg={p["green"]} guibg={p["bg_deepest"]} ctermfg={cterm["green"]} ctermbg={cterm["bg"]}
-hi GitGutterChange guifg={p["accent"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent"]} ctermbg={cterm["bg"]}
-hi GitGutterDelete guifg={p["accent_light"]} guibg={p["bg_deepest"]} ctermfg={cterm["red"]} ctermbg={cterm["bg"]}
-hi GitGutterChangeDelete guifg={p["accent_rose"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]}
+hi GitGutterAdd guifg={p["green"]} guibg={p["bg_deepest"]} ctermfg={cterm["green"]} ctermbg={cterm["bg"]} gui=bold
+hi GitGutterChange guifg={p["accent"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent"]} ctermbg={cterm["bg"]} gui=bold
+hi GitGutterDelete guifg={p["accent_light"]} guibg={p["bg_deepest"]} ctermfg={cterm["red"]} ctermbg={cterm["bg"]} gui=bold
+hi GitGutterChangeDelete guifg={p["accent_rose"]} guibg={p["bg_deepest"]} ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]} gui=bold
 
 " Diagnostics (LSP)
-hi DiagnosticError guifg={p["accent_light"]} ctermfg={cterm["red"]}
-hi DiagnosticWarn guifg={p["ansi_yellow"]} ctermfg={cterm["yellow"]}
+hi DiagnosticError guifg={p["accent_light"]} ctermfg={cterm["red"]} gui=bold
+hi DiagnosticWarn guifg={p["ansi_yellow"]} ctermfg={cterm["yellow"]} gui=bold
 hi DiagnosticInfo guifg={p["blue"]} ctermfg={cterm["blue"]}
 hi DiagnosticHint guifg={p["cyan"]} ctermfg={cterm["cyan"]}
 hi DiagnosticOk guifg={p["green"]} ctermfg={cterm["green"]}
 
 " Underlines for diagnostics
-hi DiagnosticUnderlineError guifg=none guibg=none gui=underline guisp={p["accent_light"]}
-hi DiagnosticUnderlineWarn guifg=none guibg=none gui=underline guisp={p["ansi_yellow"]}
-hi DiagnosticUnderlineInfo guifg=none guibg=none gui=underline guisp={p["blue"]}
-hi DiagnosticUnderlineHint guifg=none guibg=none gui=underline guisp={p["cyan"]}
+hi DiagnosticUnderlineError guifg=NONE guibg=NONE gui=underline guisp={p["accent_light"]}
+hi DiagnosticUnderlineWarn guifg=NONE guibg=NONE gui=underline guisp={p["ansi_yellow"]}
+hi DiagnosticUnderlineInfo guifg=NONE guibg=NONE gui=underline guisp={p["blue"]}
+hi DiagnosticUnderlineHint guifg=NONE guibg=NONE gui=underline guisp={p["cyan"]}
 
 " ═══════════════════════════════════════════════════════════════════════════════
 " Syntax Highlighting
@@ -702,21 +861,21 @@ hi Underlined guifg={p["accent"]} ctermfg={cterm["accent"]} gui=underline
 hi Ignore guifg={p["text_dim"]} ctermfg={cterm["text_dim"]}
 
 " Errors
-hi Error guifg={p["accent_light"]} guibg=none ctermfg={cterm["red"]} ctermbg=none gui=bold,underline
-hi ErrorMsg guifg={p["accent_light"]} guibg=none ctermfg={cterm["red"]} ctermbg=none
-hi WarningMsg guifg={p["ansi_yellow"]} guibg=none ctermfg={cterm["yellow"]} ctermbg=none
+hi Error guifg={p["accent_light"]} guibg=NONE ctermfg={cterm["red"]} ctermbg=NONE gui=bold,underline
+hi ErrorMsg guifg={p["accent_light"]} guibg=NONE ctermfg={cterm["red"]} ctermbg=NONE
+hi WarningMsg guifg={p["ansi_yellow"]} guibg=NONE ctermfg={cterm["yellow"]} ctermbg=NONE
 
 " Todo
-hi Todo guifg={p["green"]} guibg=none ctermfg={cterm["green"]} ctermbg=none gui=bold
+hi Todo guifg={p["green"]} guibg=NONE ctermfg={cterm["green"]} ctermbg=NONE gui=bold
 
 " ═══════════════════════════════════════════════════════════════════════════════
 " Diff Mode
 " ═══════════════════════════════════════════════════════════════════════════════
 
-hi DiffAdd guifg={p["green"]} guibg={p["green"]}20 ctermfg={cterm["green"]} ctermbg={cterm["bg"]}
-hi DiffChange guifg={p["accent"]} guibg={p["accent"]}20 ctermfg={cterm["accent"]} ctermbg={cterm["bg"]}
-hi DiffDelete guifg={p["accent_light"]} guibg={p["accent_light"]}20 ctermfg={cterm["red"]} ctermbg={cterm["bg"]}
-hi DiffText guifg={p["accent_rose"]} guibg={p["accent_rose"]}30 ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]} gui=bold
+hi DiffAdd guifg={p["green"]} guibg={p["bg_surface"]} ctermfg={cterm["green"]} ctermbg={cterm["bg"]}
+hi DiffChange guifg={p["accent"]} guibg={p["bg_surface"]} ctermfg={cterm["accent"]} ctermbg={cterm["bg"]}
+hi DiffDelete guifg={p["accent_light"]} guibg={p["bg_main"]} ctermfg={cterm["red"]} ctermbg={cterm["bg"]}
+hi DiffText guifg={p["accent_rose"]} guibg={p["bg_elevated"]} ctermfg={cterm["accent_rose"]} ctermbg={cterm["bg"]} gui=bold
 
 " ═══════════════════════════════════════════════════════════════════════════════
 " Spelling
@@ -976,15 +1135,26 @@ def write_editor_files(output_dir: Path, p: dict, name: str):
     oc_dir.mkdir(parents=True, exist_ok=True)
     theme_slug = slug.replace("-", "")
     (oc_dir / f"{theme_slug}.json").write_text(generate_opencode_theme(p, name))
-    oc_config = {"theme": theme_slug}
-    (oc_dir / "opencode.json").write_text(json.dumps(oc_config, indent=2))
+    # tui.json controls the active theme; opencode.json is for general settings
+    oc_tui = {"$schema": "https://opencode.ai/tui.json", "theme": theme_slug}
+    (oc_dir / "tui.json").write_text(json.dumps(oc_tui, indent=2))
 
-    # Kilo (same as OpenCode)
+    # Kilo Code — uses kilo.jsonc for config, themes/*.json for theme files
     kilo_dir = output_dir / "editors" / "kilo"
     kilo_dir.mkdir(parents=True, exist_ok=True)
     (kilo_dir / f"{theme_slug}.json").write_text(generate_opencode_theme(p, name))
-    kilo_kv = {"theme": theme_slug}
-    (kilo_dir / "kv.json").write_text(json.dumps(kilo_kv, indent=2))
+    kilo_config = {"theme": theme_slug}
+    (kilo_dir / "kilo.jsonc").write_text(json.dumps(kilo_config, indent=2))
+
+    # Codex CLI
+    codex_dir = output_dir / "editors" / "codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    codex_theme_slug = slug
+    (codex_dir / f"{codex_theme_slug}.tmTheme").write_text(
+        generate_codex_tmtheme(p, name)
+    )
+    codex_config = {"tui": {"theme": codex_theme_slug}}
+    (codex_dir / "config.json").write_text(json.dumps(codex_config, indent=2))
 
     # Vim / Neovim
     vim_dir = output_dir / "editors" / "vim"

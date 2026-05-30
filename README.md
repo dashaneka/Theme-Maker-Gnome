@@ -22,6 +22,7 @@ One command produces **34 files** across 11 targets:
 | Antigravity | VSIX package (auto-installed) |
 | OpenCode | Theme JSON |
 | Kilo Code | Theme JSON |
+| Codex CLI | TextMate `.tmTheme` + `tui.theme` config |
 | **Vim/Neovim** | **Complete color scheme with 100+ highlight groups** |
 | Fastfetch | Accent-colored config with wallpaper logo |
 | INSTALL.md | Step-by-step manual installation guide |
@@ -77,6 +78,8 @@ Files are saved to `~/MyTheme/` with an `INSTALL.md` for manual setup.
 
 ```
 usage: theme-maker [-h] [-n NAME] [-a ACCENT] [-o OUTPUT] [--apply]
+                   [--backup] [--restore [RESTORE]] [--doctor]
+                   [--watch] [--watch-interval WATCH_INTERVAL]
                    [--no-interactive] [-V]
                    [wallpaper]
 
@@ -88,8 +91,37 @@ options:
   -a, --accent ACCENT  Override accent color as hex (e.g. #c41e3a)
   -o, --output OUTPUT  Output directory (default: ~/<ThemeName>)
   --apply              Apply theme system-wide after generating
+  --backup              Backup current theme as a reusable template
+  --restore [RESTORE]   Restore the last saved theme state or a backup dir
+  --doctor              Check dependencies and desktop readiness
+  --watch               Watch wallpaper changes and auto-regenerate
+  --watch-interval N    Wallpaper poll interval in seconds
   --no-interactive     Skip all prompts, use defaults
   -V, --version        Show version
+
+### Restore and watch
+
+Before every apply, the app now saves an automatic restore point in
+`~/.local/state/theme-maker/backups/`. You can undo the last apply with:
+
+```bash
+theme-maker --restore
+```
+
+You can also restore a specific backup directory:
+
+```bash
+theme-maker --restore ~/.local/state/theme-maker/backups/<timestamp>-<name>
+```
+
+To keep the theme updated when your wallpaper changes, run:
+
+```bash
+theme-maker --watch --apply
+```
+
+`--watch` regenerates and reapplies the theme whenever the wallpaper path or
+file timestamp changes.
 ```
 
 ## How it works
@@ -109,7 +141,7 @@ options:
 
 4. **File generation** -- Each generator takes the palette dict and produces complete, ready-to-use config files using f-string templates.
 
-5. **System apply** -- Sets gsettings, creates symlinks, copies files to correct locations, builds and installs VSIX for Antigravity, updates editor configs.
+5. **System apply** -- Sets gsettings, creates symlinks, copies files to correct locations, builds and installs VSIX for Antigravity, updates editor configs, and installs a Codex TUI theme.
 
 ## Output structure
 
@@ -139,6 +171,7 @@ options:
     antigravity/ (same as vscode)
     opencode/   (<name>.json, opencode.json)
     kilo/       (<name>.json, kv.json)
+    codex/      (<name>.tmTheme, config.json)
     vim/        (colors/<name>.vim)  ← Full Vim/Neovim color scheme
   fastfetch/
     config.jsonc
@@ -157,7 +190,7 @@ theme_maker/
     gtk.py             GTK3, GTK4/libadwaita, GNOME Shell
     browsers.py        Firefox, Zen Browser, Chrome
     terminal.py        Ptyxis, Starship, Pywal, Xresources
-    editors.py         VS Code, Antigravity, OpenCode, Kilo, Vim/Neovim
+    editors.py         VS Code, Antigravity, OpenCode, Kilo, Codex, Vim/Neovim
     icons.py           Papirus-Dark folder icon recoloring
     cursors.py         Bibata cursor theme building
     extras.py          Fastfetch, INSTALL.md

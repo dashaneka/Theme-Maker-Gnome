@@ -469,12 +469,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--accent",
         help="Override accent color as hex (for example #c41e3a)",
     )
+    input_group.add_argument(
+        "--light",
+        action="store_true",
+        help="Generate a light theme instead of a dark theme",
+    )
 
     output_group = parser.add_argument_group("Output")
     output_group.add_argument(
         "-o",
         "--output",
-        help="Output directory (default: ~/<ThemeName>)",
+        help="Output directory (default: ~/Themes/<ThemeName>)",
     )
 
     actions = parser.add_argument_group("Actions")
@@ -906,8 +911,16 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     # ── Step 5: Generate palette ──────────────────────────────────────────
-    print(f"  {BOLD}Generating palette from accent {accent}...{RESET}")
-    palette = generate_palette(accent, wallpaper)
+    if args.light:
+        mode = "light"
+    elif interactive:
+        mode_input = _prompt_input("Theme mode (dark/light)", "dark").strip().lower()
+        mode = "light" if mode_input == "light" else "dark"
+    else:
+        mode = "dark"
+
+    print(f"  {BOLD}Generating palette from accent {accent} ({mode} mode)...{RESET}")
+    palette = generate_palette(accent, wallpaper, mode=mode)
 
     _print_palette_table(palette)
     _print_ansi_strip(palette)
@@ -918,7 +931,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     # ── Step 6: Generate theme files ──────────────────────────────────────
-    output = args.output or str(Path.home() / name)
+    output = args.output or str(Path.home() / "Themes" / name)
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -958,6 +971,9 @@ def main(argv: list[str] | None = None) -> int:
         for line in logs:
             print(f"  {line}")
         print()
+        if any(line.startswith("[FAIL]") for line in logs):
+            print(f"  {RED}{BOLD}Theme apply completed with errors.{RESET}")
+            return 1
         print(f"  {GREEN}{BOLD}Theme applied!{RESET}")
         print(f"  {DIM}Some changes may require logging out and back in.{RESET}")
         print(f"  {DIM}Chrome theme: load manually via chrome://extensions{RESET}")

@@ -552,7 +552,13 @@ def apply_cursor_theme(output_dir: Path, name: str) -> list[str]:
 
     try:
         subprocess.run(
-            ["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", slug],
+            [
+                "gsettings",
+                "set",
+                "org.gnome.desktop.interface",
+                "cursor-theme",
+                f"'{slug}'",
+            ],
             capture_output=True,
             text=True,
             check=True,

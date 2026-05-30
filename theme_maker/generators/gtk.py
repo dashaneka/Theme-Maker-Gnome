@@ -12,7 +12,7 @@ def generate_gtk3_css(p: dict, name: str) -> str:
 @define-color theme_base_color {p["bg_deepest"]};
 @define-color theme_text_color {p["text"]};
 @define-color theme_selected_bg_color {p["accent"]};
-@define-color theme_selected_fg_color #ffffff;
+@define-color theme_selected_fg_color {p["accent_fg"]};
 @define-color theme_tooltip_bg_color {p["bg_surface"]};
 @define-color theme_tooltip_fg_color {p["text"]};
 @define-color insensitive_bg_color {p["insensitive_bg"]};
@@ -88,7 +88,7 @@ button:hover {{
 button:active, button:checked {{
   background: linear-gradient(to bottom, {p["accent"]}, {p["accent_soft"]});
   border-color: {p["accent_light"]};
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 button:disabled {{
@@ -100,7 +100,7 @@ button:disabled {{
 button.suggested-action {{
   background: linear-gradient(to bottom, {p["accent"]}, {p["accent_soft"]});
   border-color: {p["accent_hover"]};
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 button.suggested-action:hover {{
@@ -110,7 +110,7 @@ button.suggested-action:hover {{
 button.destructive-action {{
   background: linear-gradient(to bottom, {p["accent"]}, {p["accent_soft"]});
   border-color: {p["accent_light"]};
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 button.flat {{
@@ -244,7 +244,7 @@ radio {{
 check:checked, radio:checked {{
   background: @theme_selected_bg_color;
   border-color: @theme_selected_bg_color;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Scale (Slider) ===== */
@@ -399,7 +399,7 @@ treeview:selected {{
 .nautilus-window .floating-bar {{
   background-color: alpha(@theme_selected_bg_color, 0.9);
   border-radius: 8px;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Calendar ===== */
@@ -412,7 +412,7 @@ calendar {{
 
 calendar:selected {{
   background: @theme_selected_bg_color;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Separator ===== */
@@ -523,19 +523,19 @@ def generate_gtk4_css(p: dict, name: str) -> str:
 /* ===== Named Colors (libadwaita) ===== */
 @define-color accent_color {p["accent"]};
 @define-color accent_bg_color {p["accent"]};
-@define-color accent_fg_color #ffffff;
+@define-color accent_fg_color {p["accent_fg"]};
 @define-color destructive_color {p["accent_light"]};
 @define-color destructive_bg_color {p["accent_light"]};
-@define-color destructive_fg_color #ffffff;
+@define-color destructive_fg_color {p["accent_light_fg"]};
 @define-color success_color {p["green"]};
 @define-color success_bg_color {p["green"]};
-@define-color success_fg_color #ffffff;
+@define-color success_fg_color {p["green_fg"]};
 @define-color warning_color {p["warning"]};
 @define-color warning_bg_color {p["warning"]};
 @define-color warning_fg_color rgba(0,0,0,0.8);
 @define-color error_color {p["accent_light"]};
 @define-color error_bg_color {p["accent_light"]};
-@define-color error_fg_color #ffffff;
+@define-color error_fg_color {p["accent_light_fg"]};
 
 @define-color window_bg_color {p["bg_main"]};
 @define-color window_fg_color {p["text"]};
@@ -597,7 +597,7 @@ button:hover {{
 button:active, button:checked {{
   background: linear-gradient(to bottom, @accent_bg_color, {p["accent_soft"]});
   border-color: {p["accent_light"]};
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 button.flat {{
@@ -611,13 +611,13 @@ button.flat:hover {{
 
 button.suggested-action {{
   background: linear-gradient(to bottom, @accent_bg_color, {p["accent_soft"]});
-  color: white;
+  color: {p["accent_fg"]};
   border-color: {p["accent_hover"]};
 }}
 
 button.destructive-action {{
   background: linear-gradient(to bottom, @destructive_bg_color, {p["accent_soft"]});
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Entry ===== */
@@ -704,7 +704,7 @@ switch:checked {{
 /* ===== Check/Radio ===== */
 check:checked, radio:checked {{
   background: @accent_bg_color;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Scale ===== */
@@ -918,14 +918,14 @@ stage {{
 
 #panel .panel-button:hover {{
   background-color: {accent_rgba}, 0.2);
-  color: #ffffff;
+  color: {p["accent_fg"]};
 }}
 
 #panel .panel-button:active,
 #panel .panel-button:checked,
 #panel .panel-button:focus {{
   background-color: {accent_rgba}, 0.35);
-  color: #ffffff;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== System Status Indicators ===== */
@@ -1071,7 +1071,7 @@ stage {{
 
 .calendar .calendar-day-base:selected {{
   background-color: {p["accent"]};
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 .calendar .calendar-day-base.calendar-day-heading {{
@@ -1081,7 +1081,7 @@ stage {{
 
 .calendar .calendar-today {{
   background-color: {accent_rgba}, 0.3);
-  color: white;
+  color: {p["accent_fg"]};
   font-weight: bold;
 }}
 
@@ -1205,7 +1205,7 @@ stage {{
 
 .popup-menu-item:active {{
   background-color: {accent_rgba}, 0.3);
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 .popup-separator-menu-item .popup-sub-menu {{
@@ -1277,7 +1277,7 @@ stage {{
   border-radius: 100%;
   height: 24px;
   width: 24px;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 .window-close:hover {{
@@ -1298,7 +1298,7 @@ stage {{
 .unlock-dialog-button {{
   background-color: {p["accent"]};
   border-radius: 100px;
-  color: white;
+  color: {p["accent_fg"]};
 }}
 
 /* ===== Login Dialog ===== */
@@ -1372,21 +1372,23 @@ ButtonLayout=appmenu:minimize,maximize,close
 """
 
 
-def generate_gtk3_settings(name: str) -> str:
+def generate_gtk3_settings(name: str, p: dict) -> str:
+    prefer_dark = "true" if p.get("mode", "dark") == "dark" else "false"
     return f"""[Settings]
 gtk-theme-name={name}
 gtk-icon-theme-name=Papirus-Dark
 gtk-cursor-theme-name=Bibata-Modern-Amber
 gtk-cursor-theme-size=24
 gtk-font-name=Cantarell 11
-gtk-application-prefer-dark-theme=true
+gtk-application-prefer-dark-theme={prefer_dark}
 gtk-decoration-layout=appmenu:minimize,maximize,close
 """
 
 
-def generate_gtk4_settings() -> str:
-    return """[Settings]
-gtk-application-prefer-dark-theme=1
+def generate_gtk4_settings(p: dict) -> str:
+    prefer_dark = "1" if p.get("mode", "dark") == "dark" else "0"
+    return f"""[Settings]
+gtk-application-prefer-dark-theme={prefer_dark}
 """
 
 
@@ -1407,5 +1409,5 @@ def write_gtk_files(output_dir: Path, p: dict, name: str):
     # GTK config
     config_dir = output_dir / "gtk-config"
     config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / "gtk3-settings.ini").write_text(generate_gtk3_settings(name))
-    (config_dir / "gtk4-settings.ini").write_text(generate_gtk4_settings())
+    (config_dir / "gtk3-settings.ini").write_text(generate_gtk3_settings(name, p))
+    (config_dir / "gtk4-settings.ini").write_text(generate_gtk4_settings(p))

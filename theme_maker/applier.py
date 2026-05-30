@@ -1,16 +1,169 @@
 """Theme applier - installs and activates the generated theme system-wide."""
 
 import json
+import re
 import shutil
 import subprocess
 import zipfile
 import tempfile
+from datetime import datetime
 from collections.abc import Callable
 from pathlib import Path
 
 from theme_maker.palette import get_gnome_accent_name
 from theme_maker.generators.icons import apply_icon_theme
 from theme_maker.generators.cursors import apply_cursor_theme
+
+
+_STATIC_BACKUP_PATHS = [
+    Path(".codex/config.toml"),
+    Path(".config/gtk-3.0"),
+    Path(".config/gtk-4.0"),
+    Path(".local/share/org.gnome.Ptyxis/palettes"),
+    Path(".config/starship.toml"),
+    Path(".cache/wal"),
+    Path(".Xresources"),
+    Path(".var/app/com.visualstudio.code/config/Code/User/settings.json"),
+    Path(".config/Antigravity/User"),
+    Path(".config/opencode/tui.json"),
+    Path(".config/opencode/themes"),
+    Path(".config/kilo/kilo.jsonc"),
+    Path(".config/kilo/themes"),
+    Path(".vim"),
+    Path(".vimrc"),
+    Path(".config/nvim"),
+    Path(".config/fastfetch"),
+]
+
+
+def _backup_home_dir() -> Path:
+    """Return the root directory used for automatic restore points."""
+    return Path.home() / ".local" / "state" / "theme-maker" / "backups"
+
+
+def _backup_pointer_file() -> Path:
+    """Return the file that stores the path to the latest restore point."""
+    return Path.home() / ".local" / "state" / "theme-maker" / "last-backup.json"
+
+
+def parse_jsonc(text: str) -> dict:
+    """Parse JSON text that may contain comments and trailing commas."""
+    # Remove single line comments
+    text = re.sub(r'//.*$', '', text, flags=re.MULTILINE)
+    # Remove multi-line comments
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    # Remove trailing commas before closing braces/brackets
+    text = re.sub(r',\s*([\]}])', r'\1', text)
+    return json.loads(text)
+
+
+def _iter_existing_rel_paths(paths: list[Path]) -> list[Path]:
+    """Return unique home-relative paths that currently exist."""
+    home = Path.home()
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for rel_path in paths:
+        if rel_path in seen:
+            continue
+        candidate = home / rel_path
+        if candidate.exists() or candidate.is_symlink():
+            unique.append(rel_path)
+            seen.add(rel_path)
+    return unique
+
+
+def _detect_profile_paths(root: Path, marker: str) -> list[Path]:
+    """Collect browser profile paths that this tool mutates."""
+    home = Path.home()
+    if not root.exists():
+        return []
+    rel_paths: list[Path] = []
+    try:
+        for profile_dir in root.iterdir():
+            if not profile_dir.is_dir() or marker not in profile_dir.name:
+                continue
+            for child in [profile_dir / "chrome", profile_dir / "user.js"]:
+                if child.exists() or child.is_symlink():
+                    rel_paths.append(child.relative_to(home))
+    except OSError:
+        return []
+    return rel_paths
+
+
+def _current_theme_backup_paths(settings_data: dict[str, str]) -> list[Path]:
+    """Return only the active theme directories that may be overwritten."""
+    rel_paths: list[Path] = []
+    for key in [
+        "org.gnome.desktop.interface.gtk-theme",
+        "org.gnome.shell.extensions.user-theme.name",
+    ]:
+        theme_name = settings_data.get(key, "").strip()
+        if theme_name:
+            rel_paths.extend(
+                [
+                    Path(".themes") / theme_name,
+                    Path(".local/share/themes") / theme_name,
+                ]
+            )
+
+    for key in [
+        "org.gnome.desktop.interface.icon-theme",
+        "org.gnome.desktop.interface.cursor-theme",
+    ]:
+        theme_name = settings_data.get(key, "").strip()
+        if theme_name:
+            rel_paths.extend(
+                [
+                    Path(".icons") / theme_name,
+                    Path(".local/share/icons") / theme_name,
+                ]
+            )
+
+    rel_paths.extend(
+        _detect_profile_paths(Path.home() / ".mozilla" / "firefox", ".default-release")
+    )
+    rel_paths.extend(
+        _detect_profile_paths(
+            Path.home() / ".var" / "app" / "app.zen_browser.zen" / ".zen",
+            "Default",
+        )
+    )
+    return _iter_existing_rel_paths(rel_paths)
+
+
+def _backup_paths_for_restore(settings_data: dict[str, str]) -> list[Path]:
+    """Return the minimal set of paths needed for a restore point."""
+    return _iter_existing_rel_paths(
+        _STATIC_BACKUP_PATHS
+        + _current_theme_backup_paths(settings_data)
+        + _current_codex_theme_backup_paths()
+    )
+
+
+def _read_codex_theme_name() -> str | None:
+    """Return the current Codex TUI theme name from ~/.codex/config.toml."""
+    config_path = Path.home() / ".codex" / "config.toml"
+    if not config_path.exists():
+        return None
+    try:
+        import tomllib
+
+        data = tomllib.loads(config_path.read_text())
+    except (ModuleNotFoundError, OSError, ValueError):
+        return None
+    tui = data.get("tui")
+    if not isinstance(tui, dict):
+        return None
+    theme = tui.get("theme")
+    return theme if isinstance(theme, str) and theme.strip() else None
+
+
+def _current_codex_theme_backup_paths() -> list[Path]:
+    """Back up the active custom Codex theme file if one is selected."""
+    theme_name = _read_codex_theme_name()
+    if not theme_name:
+        return []
+    return _iter_existing_rel_paths([Path(".codex/themes") / f"{theme_name}.tmTheme"])
 
 
 def _fast_copy(src: Path, dst: Path) -> None:
@@ -33,9 +186,10 @@ def _fast_copy(src: Path, dst: Path) -> None:
                 ],
                 capture_output=True,
                 check=True,
+                text=True,
                 timeout=30,
             )
-        except subprocess.TimeoutExpired:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             shutil.copytree(src, dst, symlinks=False)
     else:
         shutil.copytree(src, dst, symlinks=False)
@@ -50,12 +204,31 @@ def _run(
     )
 
 
+_GSETTINGS_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _to_gsettings_value(value: str) -> str:
+    """Convert a plain Python string into a gsettings CLI value literal."""
+    if value in {"true", "false"}:
+        return value
+    if _GSETTINGS_NUMBER.fullmatch(value):
+        return value
+    if value.startswith("'") and value.endswith("'"):
+        return value
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 def _gsettings_set(schema: str, key: str, value: str) -> bool:
     """Set a gsettings key. Returns True on success."""
     try:
-        _run(["gsettings", "set", schema, key, value])
+        _run(["gsettings", "set", schema, key, _to_gsettings_value(value)])
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         return False
 
 
@@ -78,6 +251,346 @@ def _copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
+
+
+def _copy_home_path(src: Path, backup_home: Path) -> None:
+    """Back up a path from the user's home directory preserving relative layout."""
+    home = Path.home()
+    if not src.exists() and not src.is_symlink():
+        return
+    rel = src.relative_to(home)
+    dst = backup_home / rel
+    if src.is_dir() and not src.is_symlink():
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst, symlinks=True)
+    else:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst, follow_symlinks=False)
+
+
+def _load_json(path: Path) -> dict:
+    """Load JSON from disk, returning an empty dict if missing or invalid."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def _write_json(path: Path, data: dict, indent: int = 2) -> None:
+    """Write JSON to disk with parent directories created first."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=indent))
+
+
+def _quote_toml_string(value: str) -> str:
+    """Serialize a TOML basic string value."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _upsert_toml_table_key(path: Path, table: str, key: str, value: str) -> bool:
+    """Set a key inside a TOML table while preserving unrelated content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        content = path.read_text() if path.exists() else ""
+    except OSError:
+        return False
+
+    header = f"[{table}]"
+    rendered = f"{key} = {_quote_toml_string(value)}"
+    lines = content.splitlines()
+
+    start = None
+    end = len(lines)
+    for idx, line in enumerate(lines):
+        if line.strip() == header:
+            start = idx
+            break
+
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([header, rendered])
+    else:
+        for idx in range(start + 1, len(lines)):
+            stripped = lines[idx].strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                end = idx
+                break
+        replaced = False
+        for idx in range(start + 1, end):
+            if lines[idx].strip().startswith(f"{key} ="):
+                lines[idx] = rendered
+                replaced = True
+                break
+        if not replaced:
+            insert_at = end
+            while insert_at > start + 1 and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            lines.insert(insert_at, rendered)
+
+    try:
+        path.write_text("\n".join(lines).rstrip() + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def create_undo_backup(theme_name: str = "") -> tuple[Path, list[str]]:
+    """Create a restore point for the current user theme state."""
+    log: list[str] = []
+    home = Path.home()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", theme_name.strip()) or "state"
+    backup_dir = _backup_home_dir() / f"{timestamp}-{safe_name}"
+    backup_home = backup_dir / "home"
+    backup_home.mkdir(parents=True, exist_ok=True)
+
+    settings_to_backup = [
+        ("org.gnome.desktop.interface", "gtk-theme"),
+        ("org.gnome.desktop.interface", "color-scheme"),
+        ("org.gnome.desktop.interface", "accent-color"),
+        ("org.gnome.desktop.interface", "icon-theme"),
+        ("org.gnome.desktop.interface", "cursor-theme"),
+        ("org.gnome.shell.extensions.user-theme", "name"),
+        ("org.gnome.desktop.background", "picture-uri"),
+        ("org.gnome.desktop.background", "picture-uri-dark"),
+    ]
+
+    settings_data: dict[str, str] = {}
+    for schema, key in settings_to_backup:
+        try:
+            result = subprocess.run(
+                ["gsettings", "get", schema, key],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            value = result.stdout.strip().strip("'\"")
+            if value and value != "''":
+                settings_data[f"{schema}.{key}"] = value
+                log.append(f"  Backed up: {schema}.{key} = {value}")
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
+            pass
+
+    backup_paths = _backup_paths_for_restore(settings_data)
+    for rel_path in backup_paths:
+        src = home / rel_path
+        if src.exists() or src.is_symlink():
+            try:
+                _copy_home_path(src, backup_home)
+                log.append(f"  Backed up: {src}")
+            except (OSError, shutil.Error) as exc:
+                log.append(f"  [WARN] Failed to backup {src}: {exc}")
+
+    manifest = {
+        "name": theme_name or "Theme Backup",
+        "created_at": timestamp,
+        "settings": settings_data,
+        "paths": [str(path) for path in backup_paths],
+    }
+    _write_json(backup_dir / "manifest.json", manifest, indent=2)
+    _write_json(backup_dir / "settings.json", settings_data, indent=2)
+    _write_json(_backup_pointer_file(), {"backup_dir": str(backup_dir)}, indent=2)
+    log.append(f"  Saved restore point: {backup_dir}")
+    return backup_dir, log
+
+
+def _resolve_backup_dir(backup_dir: Path | None) -> Path | None:
+    """Resolve explicit or last-used backup directories."""
+    if backup_dir is not None:
+        return backup_dir
+    pointer = _backup_pointer_file()
+    if pointer.exists():
+        try:
+            data = json.loads(pointer.read_text())
+            candidate = data.get("backup_dir")
+            if candidate:
+                return Path(candidate)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def _backup_paths_from_manifest(backup_dir: Path) -> list[Path]:
+    """Load the relative paths stored for a restore point."""
+    manifest = _load_json(backup_dir / "manifest.json")
+    raw_paths = manifest.get("paths")
+    if not isinstance(raw_paths, list):
+        return list(_STATIC_BACKUP_PATHS)
+    paths: list[Path] = []
+    for raw_path in raw_paths:
+        if isinstance(raw_path, str) and raw_path:
+            paths.append(Path(raw_path))
+    return paths or list(_STATIC_BACKUP_PATHS)
+
+
+def restore_theme(backup_dir: Path | None = None) -> list[str]:
+    """Restore a saved theme state."""
+    log: list[str] = []
+    resolved = _resolve_backup_dir(backup_dir)
+    if resolved is None or not resolved.exists():
+        return ["  [FAIL] No restore point found"]
+
+    home = Path.home()
+    backup_home = resolved / "home"
+
+    settings_file = resolved / "settings.json"
+    settings_data = _load_json(settings_file)
+    for full_key, value in settings_data.items():
+        if "." not in full_key:
+            continue
+        schema, key = full_key.rsplit(".", 1)
+        if _gsettings_set(schema, key, value):
+            log.append(f"  Restored {schema} {key} = {value}")
+        else:
+            log.append(f"  [WARN] Could not restore {schema} {key}")
+
+    if backup_home.exists():
+        for rel_path in _backup_paths_from_manifest(resolved):
+            src = backup_home / rel_path
+            dst = home / rel_path
+            if not src.exists() and not src.is_symlink():
+                continue
+            try:
+                if src.is_dir() and not src.is_symlink():
+                    if dst.exists() or dst.is_symlink():
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst, symlinks=True)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if dst.exists() or dst.is_symlink():
+                        dst.unlink()
+                    shutil.copy2(src, dst, follow_symlinks=False)
+                log.append(f"  Restored {dst}")
+            except OSError as exc:
+                log.append(f"  [WARN] Failed to restore {dst}: {exc}")
+        log.append(f"  Restored files from {backup_home}")
+    else:
+        # Legacy backup format support.
+        legacy_map = {
+            "gtk3-settings.ini": home / ".config" / "gtk-3.0" / "settings.ini",
+            "gtk4-settings.ini": home / ".config" / "gtk-4.0" / "settings.ini",
+            "gtk3.css": home / ".config" / "gtk-3.0" / "gtk.css",
+            "gtk4.css": home / ".config" / "gtk-4.0" / "gtk.css",
+        }
+        for name, dst in legacy_map.items():
+            src = resolved / name
+            if src.exists():
+                _copy_file(src, dst)
+                log.append(f"  Restored {dst}")
+
+        for legacy_dir, dst in [("themes", home / ".themes"), ("icons", home / ".icons")]:
+            src = resolved / legacy_dir
+            if src.exists():
+                _fast_copy(src, dst)
+                log.append(f"  Restored {dst}")
+
+    return log
+
+
+def _inject_vim_colorscheme(block_path: Path, theme_name: str, slug: str) -> bool:
+    """Ensure a Vimscript config loads the generated colorscheme."""
+    lines: list[str] = []
+    if block_path.exists():
+        try:
+            lines = block_path.read_text().splitlines()
+        except OSError:
+            return False
+
+    start = f'" Theme Maker for GNOME: start {theme_name}'
+    end = f'" Theme Maker for GNOME: end {theme_name}'
+    block = [
+        start,
+        f"if filereadable(expand('~/.vim/colors/{slug}.vim'))",
+        f"  colorscheme {slug}",
+        "endif",
+        f"command! ThemeMakerReload if filereadable(expand('~/.vim/colors/{slug}.vim')) | colorscheme {slug} | endif",
+        end,
+    ]
+
+    if any(line == start for line in lines) and any(line == end for line in lines):
+        # Replace the existing managed block in place.
+        new_lines: list[str] = []
+        inside = False
+        for line in lines:
+            if line == start:
+                inside = True
+                new_lines.extend(block)
+                continue
+            if inside and line == end:
+                inside = False
+                continue
+            if not inside:
+                new_lines.append(line)
+        lines = new_lines
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(block)
+
+    try:
+        block_path.write_text("\n".join(lines) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def _inject_lua_colorscheme(block_path: Path, theme_name: str, slug: str) -> bool:
+    """Ensure a Neovim Lua config loads the generated colorscheme."""
+    lines: list[str] = []
+    if block_path.exists():
+        try:
+            lines = block_path.read_text().splitlines()
+        except OSError:
+            return False
+
+    start = f"-- Theme Maker for GNOME: start {theme_name}"
+    end = f"-- Theme Maker for GNOME: end {theme_name}"
+    block = [
+        start,
+        f"vim.api.nvim_create_user_command('ThemeMakerReload', function()",
+        f"  pcall(vim.cmd.colorscheme, '{slug}')",
+        "end, {})",
+        f"pcall(vim.cmd.colorscheme, '{slug}')",
+        end,
+    ]
+
+    if any(line == start for line in lines) and any(line == end for line in lines):
+        new_lines: list[str] = []
+        inside = False
+        for line in lines:
+            if line == start:
+                inside = True
+                new_lines.extend(block)
+                continue
+            if inside and line == end:
+                inside = False
+                continue
+            if not inside:
+                new_lines.append(line)
+        lines = new_lines
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(block)
+
+    try:
+        block_path.write_text("\n".join(lines) + "\n")
+        return True
+    except OSError:
+        return False
 
 
 def apply_gtk_theme(output_dir: Path, name: str) -> list[str]:
@@ -136,14 +649,15 @@ def apply_gtk_theme(output_dir: Path, name: str) -> list[str]:
     return log
 
 
-def apply_gnome_settings(name: str, accent_hex: str, wallpaper: str) -> list[str]:
+def apply_gnome_settings(name: str, accent_hex: str, wallpaper: str, mode: str = "dark") -> list[str]:
     """Apply GNOME desktop settings via gsettings."""
     log: list[str] = []
     accent_name = get_gnome_accent_name(accent_hex)
+    color_scheme = "prefer-dark" if mode == "dark" else "prefer-light"
 
     settings = [
         ("org.gnome.desktop.interface", "gtk-theme", name),
-        ("org.gnome.desktop.interface", "color-scheme", "prefer-dark"),
+        ("org.gnome.desktop.interface", "color-scheme", color_scheme),
         ("org.gnome.desktop.interface", "accent-color", accent_name),
         ("org.gnome.shell.extensions.user-theme", "name", name),
     ]
@@ -197,10 +711,37 @@ def apply_terminal(output_dir: Path, name: str) -> list[str]:
     # Ptyxis palette
     ptyxis_src = output_dir / "terminal" / "ptyxis" / f"{slug}.palette"
     if ptyxis_src.exists():
+        # Native path
         ptyxis_dst = home / ".local" / "share" / "org.gnome.Ptyxis" / "palettes"
         ptyxis_dst.mkdir(parents=True, exist_ok=True)
         _copy_file(ptyxis_src, ptyxis_dst / f"{slug}.palette")
+        
+        # Flatpak path
+        ptyxis_flatpak_dst = home / ".var" / "app" / "app.devsuite.Ptyxis" / "data" / "ptyxis" / "palettes"
+        if ptyxis_flatpak_dst.parent.exists():
+            ptyxis_flatpak_dst.mkdir(parents=True, exist_ok=True)
+            _copy_file(ptyxis_src, ptyxis_flatpak_dst / f"{slug}.palette")
+
         log.append(f"  Installed Ptyxis palette: {slug}.palette")
+
+        # Programmatically apply the palette to the default profile and configure opacity/scrollbars
+        try:
+            res = subprocess.run(
+                ["gsettings", "get", "org.gnome.Ptyxis", "default-profile-uuid"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                uuid = res.stdout.strip().strip("'")
+                if uuid:
+                    path = f"org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{uuid}/"
+                    _gsettings_set(path, "palette", name)
+                    _gsettings_set(path, "opacity", "0.88")
+                    _gsettings_set("org.gnome.Ptyxis", "scrollbar-policy", "never")
+                    log.append(f"  Applied Ptyxis palette '{name}', set opacity to 0.88, and hid scrollbar")
+        except Exception as e:
+            log.append(f"  [WARN] Failed to configure Ptyxis profile via gsettings: {e}")
 
     # Starship
     star_src = output_dir / "terminal" / "starship" / "starship.toml"
@@ -292,7 +833,7 @@ def apply_browsers(output_dir: Path, name: str) -> list[str]:
 
 
 def apply_vscode(output_dir: Path, name: str) -> list[str]:
-    """Install VS Code theme extension to Flatpak data directory."""
+    """Install VS Code/VSCodium theme extensions and configure settings."""
     log: list[str] = []
     slug = name.lower().replace(" ", "-")
     home = Path.home()
@@ -301,50 +842,71 @@ def apply_vscode(output_dir: Path, name: str) -> list[str]:
     if not vsc_src.exists():
         return log
 
-    # Flatpak VS Code
-    vsc_ext_root = (
-        home
-        / ".var"
-        / "app"
-        / "com.visualstudio.code"
-        / "data"
-        / "vscode"
-        / "extensions"
-    )
-    if vsc_ext_root.parent.exists():
-        ext_dir = vsc_ext_root / f"{slug}-theme"
-        ext_dir.mkdir(parents=True, exist_ok=True)
-        (ext_dir / "themes").mkdir(exist_ok=True)
+    # Define all paths for native/Flatpak versions of VS Code & VSCodium
+    configs = [
+        (
+            "VS Code (Native)",
+            home / ".vscode" / "extensions",
+            home / ".config" / "Code" / "User"
+        ),
+        (
+            "VS Code (Flatpak)",
+            home / ".var" / "app" / "com.visualstudio.code" / "data" / "vscode" / "extensions",
+            home / ".var" / "app" / "com.visualstudio.code" / "config" / "Code" / "User"
+        ),
+        (
+            "VSCodium (Native)",
+            home / ".vscodium" / "extensions",
+            home / ".config" / "VSCodium" / "User"
+        ),
+        (
+            "VSCodium (Flatpak)",
+            home / ".var" / "app" / "com.vscodium.codium" / "data" / "vscodium" / "extensions",
+            home / ".var" / "app" / "com.vscodium.codium" / "config" / "VSCodium" / "User"
+        ),
+    ]
 
-        pkg = vsc_src / "package.json"
-        if pkg.exists():
-            _copy_file(pkg, ext_dir / "package.json")
-
-        themes_src = vsc_src / "themes"
-        if themes_src.exists():
-            for f in themes_src.iterdir():
-                _copy_file(f, ext_dir / "themes" / f.name)
-
-        log.append(f"  Installed VS Code Flatpak extension: {slug}-theme")
-
-    # Also copy settings.json recommendation
-    settings_src = vsc_src / "settings.json"
-    vsc_settings_dir = (
-        home / ".var" / "app" / "com.visualstudio.code" / "config" / "Code" / "User"
-    )
-    if settings_src.exists() and vsc_settings_dir.exists():
-        # Merge colorTheme into existing settings rather than overwriting
-        existing = {}
-        target = vsc_settings_dir / "settings.json"
-        if target.exists():
+    for label, ext_root, settings_dir in configs:
+        if settings_dir.parent.exists() or ext_root.parent.exists():
             try:
-                existing = json.loads(target.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-        new_settings = json.loads(settings_src.read_text())
-        existing.update(new_settings)
-        target.write_text(json.dumps(existing, indent=4))
-        log.append(f"  Updated VS Code settings with theme: {name}")
+                # 1. Install Extension
+                ext_dir = ext_root / f"theme-maker.{slug}-theme-1.0.0"
+                if ext_dir.exists():
+                    shutil.rmtree(ext_dir)
+                ext_dir.mkdir(parents=True, exist_ok=True)
+                (ext_dir / "themes").mkdir(exist_ok=True)
+
+                pkg = vsc_src / "package.json"
+                if pkg.exists():
+                    _copy_file(pkg, ext_dir / "package.json")
+
+                themes_src = vsc_src / "themes"
+                if themes_src.exists():
+                    for f in themes_src.iterdir():
+                        _copy_file(f, ext_dir / "themes" / f.name)
+
+                log.append(f"  Installed {label} extension: theme-maker.{slug}-theme-1.0.0")
+
+                # 2. Update Settings
+                settings_src = vsc_src / "settings.json"
+                if settings_src.exists():
+                    settings_dir.mkdir(parents=True, exist_ok=True)
+                    target = settings_dir / "settings.json"
+                    existing = {}
+                    if target.exists():
+                        try:
+                            existing = parse_jsonc(target.read_text())
+                        except Exception:
+                            pass
+                    try:
+                        new_settings = parse_jsonc(settings_src.read_text())
+                        existing.update(new_settings)
+                        target.write_text(json.dumps(existing, indent=4))
+                        log.append(f"  Updated {label} settings with theme: {name}")
+                    except Exception as e:
+                        log.append(f"  [WARN] Failed to write settings to {target}: {e}")
+            except Exception as e:
+                log.append(f"  [WARN] Failed to apply to {label}: {e}")
 
     return log
 
@@ -363,7 +925,7 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
     ext_root = home / ".antigravity" / "extensions"
     ext_root.mkdir(parents=True, exist_ok=True)
 
-    ext_dir = ext_root / f"{slug}-theme"
+    ext_dir = ext_root / f"theme-maker.{slug}-theme-1.0.0"
     if ext_dir.exists():
         shutil.rmtree(ext_dir)
     ext_dir.mkdir(parents=True)
@@ -387,31 +949,31 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
     settings_data = {}
     if settings_file.exists():
         try:
-            settings_data = json.loads(settings_file.read_text())
-        except (json.JSONDecodeError, OSError):
+            settings_data = parse_jsonc(settings_file.read_text())
+        except Exception:
             pass
 
     # Get display name from package.json
     display_name = name
     if pkg.exists():
         try:
-            pkg_data = json.loads(pkg.read_text())
+            pkg_data = parse_jsonc(pkg.read_text())
             display_name = pkg_data.get("displayName", name)
-        except (json.JSONDecodeError, OSError):
+        except Exception:
             pass
 
     settings_data["workbench.colorTheme"] = display_name
     settings_file.parent.mkdir(parents=True, exist_ok=True)
     settings_file.write_text(json.dumps(settings_data, indent=4))
 
-    log.append(f"  Installed Antigravity theme: {slug}-theme")
+    log.append(f"  Installed Antigravity theme: theme-maker.{slug}-theme-1.0.0")
     log.append(f"  Set Antigravity color theme to: {display_name}")
 
     return log
 
 
 def apply_opencode(output_dir: Path, name: str) -> list[str]:
-    """Install OpenCode theme."""
+    """Install OpenCode theme and activate it via tui.json."""
     log: list[str] = []
     slug = name.lower().replace(" ", "").replace("-", "")
     home = Path.home()
@@ -428,23 +990,18 @@ def apply_opencode(output_dir: Path, name: str) -> list[str]:
         _copy_file(theme_file, oc_themes / f"{slug}.json")
         log.append(f"  Installed OpenCode theme: {slug}")
 
-    # Update opencode.json config to select theme
-    oc_config = home / ".config" / "opencode" / "opencode.json"
-    config_data: dict = {}
-    if oc_config.exists():
-        try:
-            config_data = json.loads(oc_config.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    config_data["theme"] = slug
-    oc_config.write_text(json.dumps(config_data, indent=2))
-    log.append(f"  Set OpenCode theme to: {slug}")
+    # OpenCode reads the active theme from tui.json, not opencode.json
+    tui_config = home / ".config" / "opencode" / "tui.json"
+    tui_data = _load_json(tui_config)   # keep existing keys
+    tui_data["theme"] = slug            # overwrite only the theme key
+    _write_json(tui_config, tui_data)
+    log.append(f"  Set OpenCode theme to: {slug} (in tui.json)")
 
     return log
 
 
 def apply_kilo(output_dir: Path, name: str) -> list[str]:
-    """Install Kilo Code theme."""
+    """Install Kilo Code theme and activate it via kilo.jsonc."""
     log: list[str] = []
     slug = name.lower().replace(" ", "").replace("-", "")
     home = Path.home()
@@ -461,18 +1018,38 @@ def apply_kilo(output_dir: Path, name: str) -> list[str]:
         _copy_file(theme_file, kilo_themes / f"{slug}.json")
         log.append(f"  Installed Kilo theme: {slug}")
 
-    # Update kv.json
-    kv_path = home / ".local" / "state" / "kilo" / "kv.json"
-    kv_path.parent.mkdir(parents=True, exist_ok=True)
-    kv_data: dict = {}
-    if kv_path.exists():
-        try:
-            kv_data = json.loads(kv_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    kv_data["theme"] = slug
-    kv_path.write_text(json.dumps(kv_data, indent=2))
-    log.append(f"  Set Kilo theme to: {slug}")
+    # Kilo Code reads its active theme from kilo.jsonc (global config)
+    kilo_config = home / ".config" / "kilo" / "kilo.jsonc"
+    config_data = _load_json(kilo_config)   # keep existing keys
+    config_data["theme"] = slug             # overwrite only the theme key
+    _write_json(kilo_config, config_data)
+    log.append(f"  Set Kilo theme to: {slug} (in kilo.jsonc)")
+
+    return log
+
+
+def apply_codex(output_dir: Path, name: str) -> list[str]:
+    """Install a custom Codex syntax theme and select it in config.toml."""
+    log: list[str] = []
+    home = Path.home()
+    slug = name.lower().replace(" ", "-")
+
+    codex_src = output_dir / "editors" / "codex"
+    if not codex_src.exists():
+        return log
+
+    theme_src = codex_src / f"{slug}.tmTheme"
+    if theme_src.exists():
+        theme_dst = home / ".codex" / "themes" / f"{slug}.tmTheme"
+        theme_dst.parent.mkdir(parents=True, exist_ok=True)
+        _copy_file(theme_src, theme_dst)
+        log.append(f"  Installed Codex theme: {slug}")
+
+    config_path = home / ".codex" / "config.toml"
+    if _upsert_toml_table_key(config_path, "tui", "theme", slug):
+        log.append(f"  Set Codex TUI theme to: {slug}")
+    else:
+        log.append("  [WARN] Could not update ~/.codex/config.toml")
 
     return log
 
@@ -492,12 +1069,22 @@ def apply_vim(output_dir: Path, name: str) -> list[str]:
     vim_colors.mkdir(parents=True, exist_ok=True)
     _copy_file(vim_src, vim_colors / f"{slug}.vim")
     log.append(f"  Installed Vim colorscheme: {slug}")
+    if _inject_vim_colorscheme(home / ".vimrc", name, slug):
+        log.append("  Enabled Vim colorscheme in ~/.vimrc")
 
     # Neovim
     nvim_colors = home / ".config" / "nvim" / "colors"
     nvim_colors.mkdir(parents=True, exist_ok=True)
     _copy_file(vim_src, nvim_colors / f"{slug}.vim")
     log.append(f"  Installed Neovim colorscheme: {slug}")
+    nvim_init_vim = home / ".config" / "nvim" / "init.vim"
+    nvim_init_lua = home / ".config" / "nvim" / "init.lua"
+    if nvim_init_lua.exists():
+        if _inject_lua_colorscheme(nvim_init_lua, name, slug):
+            log.append("  Enabled Neovim colorscheme in init.lua")
+    else:
+        if _inject_vim_colorscheme(nvim_init_vim, name, slug):
+            log.append("  Enabled Neovim colorscheme in init.vim")
 
     return log
 
@@ -512,6 +1099,16 @@ def apply_fastfetch(output_dir: Path) -> list[str]:
         dst = home / ".config" / "fastfetch" / "config.jsonc"
         dst.parent.mkdir(parents=True, exist_ok=True)
         _copy_file(src, dst)
+        
+        # Clear fastfetch image cache so chafa logo updates
+        cache_dir = home / ".cache" / "fastfetch"
+        if cache_dir.exists():
+            try:
+                shutil.rmtree(cache_dir)
+                log.append("  Cleared fastfetch logo cache")
+            except OSError:
+                pass
+
         log.append("  Installed fastfetch config")
 
     return log
@@ -544,7 +1141,7 @@ def apply_theme(
         ("GTK Theme", lambda: apply_gtk_theme(output_dir, name)),
         (
             "GNOME Settings",
-            lambda: apply_gnome_settings(name, palette["accent"], wallpaper),
+            lambda: apply_gnome_settings(name, palette["accent"], wallpaper, palette.get("mode", "dark")),
         ),
         ("Dash to Dock", lambda: apply_dash_to_dock(palette)),
         ("Terminal", lambda: apply_terminal(output_dir, name)),
@@ -554,6 +1151,7 @@ def apply_theme(
         ("Antigravity", lambda: apply_antigravity(output_dir, name)),
         ("OpenCode", lambda: apply_opencode(output_dir, name)),
         ("Kilo Code", lambda: apply_kilo(output_dir, name)),
+        ("Codex", lambda: apply_codex(output_dir, name)),
         ("Fastfetch", lambda: apply_fastfetch(output_dir)),
         ("Icon Theme", lambda: apply_icon_theme(output_dir, name)),
         ("Cursor Theme", lambda: apply_cursor_theme(output_dir, name)),

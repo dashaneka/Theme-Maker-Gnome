@@ -36,58 +36,97 @@ Color15={p["ansi_bright_white"]}
 
 
 def generate_starship_toml(p: dict) -> str:
-    return f"""add_newline = true
+    # Map the powerline segments to the wallpaper's HSL palette tints
+    c1 = p["accent"]        # Username segment background
+    c2 = p["accent_soft"]   # Directory segment background
+    c3 = p["accent_rose"]   # Git segment background
+    c4 = p["blue"]          # Language/package background
+    c5 = p["cyan"]          # Docker segment background
+    c6 = p["border"]        # Time segment background
+    
+    fg_dark = p["bg_deepest"]  # Dark text for light pastel backgrounds
+    fg_light = "#ffffff"       # White text for dark/vibrant backgrounds
 
-# Prompt format
-format = \"\"\"$username$hostname$directory$git_branch$git_status$cmd_duration$line_break$character\"\"\"
+    return f"""add_newline = false
 
-[character]
-success_symbol = "[❯](bold {p["accent"]})"
-error_symbol = "[❯](bold {p["accent_light"]})"
-
-[directory]
-truncation_length = 3
-truncation_symbol = "…/"
-style = "bold {p["accent_rose"]}"
-read_only = " ro"
-read_only_style = "bold {p["accent"]}"
-
-[git_branch]
-symbol = " "
-style = "bold {p["accent_soft"]}"
-format = "on [$symbol$branch]($style) "
-
-[git_status]
-style = "bold {p["accent"]}"
-format = '([$all_status$ahead_behind]($style) )'
-ahead = "⇡${{count}}"
-behind = "⇣${{count}}"
-modified = "!${{count}}"
-staged = "+${{count}}"
-untracked = "?${{count}}"
-
-[hostname]
-ssh_only = false
-format = "[@$hostname](bold {p["border"]}) "
-disabled = false
+# Pastel Powerline Preset - Auto-generated with Wallpaper Palette
+format = \"\"\"
+[░▒▓](fg:{c1})\
+$os\
+$username\
+[](bg:{c2} fg:{c1})\
+$directory\
+[](fg:{c2} bg:{c3})\
+$git_branch\
+$git_status\
+[](fg:{c3} bg:{c4})\
+$rust\
+$python\
+$nodejs\
+$golang\
+[](fg:{c4} bg:{c5})\
+$docker_context\
+[](fg:{c5} bg:{c6})\
+$time\
+[ ](fg:{c6})\
+\"\"\"
 
 [username]
-style_user = "bold {p["accent"]}"
-format = "[$user]($style)"
 show_always = true
+style_user = "bg:{c1} fg:{fg_light} bold"
+style_root = "bg:{c1} fg:{fg_light} bold"
+format = '[$user]($style)'
 disabled = false
 
-[cmd_duration]
-style = "bold {p["deep_maroon"]}"
-format = "took [$duration]($style) "
-min_time = 2_000
-
-[memory_usage]
-style = "bold {p["accent"]}"
+[os]
+style = "bg:{c1} fg:{fg_light}"
 disabled = true
 
-[package]
-disabled = true
+[directory]
+style = "bg:{c2} fg:{fg_dark} bold"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = " "
+style = "bg:{c3} fg:{fg_dark} bold"
+format = '[ $symbol$branch ]($style)'
+
+[git_status]
+style = "bg:{c3} fg:{fg_dark} bold"
+format = '[$all_status$ahead_behind ]($style)'
+
+[rust]
+symbol = "🦀 "
+style = "bg:{c4} fg:{fg_dark} bold"
+format = '[ $symbol($version) ]($style)'
+
+[python]
+symbol = "🐍 "
+style = "bg:{c4} fg:{fg_dark} bold"
+format = '[ $symbol($version) ]($style)'
+
+[nodejs]
+symbol = "⬢ "
+style = "bg:{c4} fg:{fg_dark} bold"
+format = '[ $symbol($version) ]($style)'
+
+[golang]
+symbol = "🐹 "
+style = "bg:{c4} fg:{fg_dark} bold"
+format = '[ $symbol($version) ]($style)'
+
+[docker_context]
+symbol = "🐳 "
+style = "bg:{c5} fg:{fg_dark} bold"
+format = '[ $symbol$context ]($style)'
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:{c6} fg:{fg_light} bold"
+format = '[ ♥ $time ]($style)'
 """
 
 
