@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import zipfile
 import tempfile
+import configparser
+import time
 from datetime import datetime
 from collections.abc import Callable
 from pathlib import Path
@@ -23,8 +25,16 @@ _STATIC_BACKUP_PATHS = [
     Path(".config/starship.toml"),
     Path(".cache/wal"),
     Path(".Xresources"),
+    Path(".vscode/extensions/extensions.json"),
+    Path(".vscodium/extensions/extensions.json"),
+    Path(".config/Code/User/settings.json"),
+    Path(".config/VSCodium/User/settings.json"),
     Path(".var/app/com.visualstudio.code/config/Code/User/settings.json"),
+    Path(".var/app/com.visualstudio.code/data/vscode/extensions/extensions.json"),
+    Path(".var/app/com.vscodium.codium/config/VSCodium/User/settings.json"),
+    Path(".var/app/com.vscodium.codium/data/vscodium/extensions/extensions.json"),
     Path(".config/Antigravity/User"),
+    Path(".antigravity/extensions/extensions.json"),
     Path(".config/opencode/tui.json"),
     Path(".config/opencode/themes"),
     Path(".config/kilo/kilo.jsonc"),
@@ -72,21 +82,54 @@ def _iter_existing_rel_paths(paths: list[Path]) -> list[Path]:
     return unique
 
 
-def _detect_profile_paths(root: Path, marker: str) -> list[Path]:
-    """Collect browser profile paths that this tool mutates."""
-    home = Path.home()
+def _browser_profiles(root: Path) -> list[Path]:
+    """Return browser profiles declared by profiles.ini, with a safe fallback."""
     if not root.exists():
         return []
-    rel_paths: list[Path] = []
+
+    profiles: list[Path] = []
+    ini_path = root / "profiles.ini"
+    if ini_path.exists():
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(ini_path)
+            for section in parser.sections():
+                if not section.startswith("Profile") or not parser.has_option(section, "Path"):
+                    continue
+                raw_path = Path(parser.get(section, "Path"))
+                profile = root / raw_path if parser.getboolean(
+                    section, "IsRelative", fallback=True
+                ) else raw_path.expanduser()
+                if profile.is_dir() and profile not in profiles:
+                    profiles.append(profile)
+        except (configparser.Error, OSError, ValueError):
+            pass
+
+    if profiles:
+        return profiles
+
     try:
-        for profile_dir in root.iterdir():
-            if not profile_dir.is_dir() or marker not in profile_dir.name:
-                continue
-            for child in [profile_dir / "chrome", profile_dir / "user.js"]:
-                if child.exists() or child.is_symlink():
-                    rel_paths.append(child.relative_to(home))
+        return [
+            child
+            for child in root.iterdir()
+            if child.is_dir()
+            and any((child / marker).exists() for marker in ("prefs.js", "times.json"))
+        ]
     except OSError:
         return []
+
+
+def _detect_profile_paths(root: Path) -> list[Path]:
+    """Collect browser profile paths that this tool mutates."""
+    home = Path.home()
+    rel_paths: list[Path] = []
+    for profile_dir in _browser_profiles(root):
+        for child in [profile_dir / "chrome", profile_dir / "user.js"]:
+            if child.exists() or child.is_symlink():
+                try:
+                    rel_paths.append(child.relative_to(home))
+                except ValueError:
+                    pass
     return rel_paths
 
 
@@ -119,25 +162,55 @@ def _current_theme_backup_paths(settings_data: dict[str, str]) -> list[Path]:
                 ]
             )
 
-    rel_paths.extend(
-        _detect_profile_paths(Path.home() / ".mozilla" / "firefox", ".default-release")
-    )
-    rel_paths.extend(
-        _detect_profile_paths(
-            Path.home() / ".var" / "app" / "app.zen_browser.zen" / ".zen",
-            "Default",
-        )
-    )
+    for root in _gecko_browser_roots():
+        rel_paths.extend(_detect_profile_paths(root))
+    document_origins = _flatpak_document_origins()
+    home = Path.home()
+    for _, root in _chromium_browser_roots(home):
+        for theme_dir in _active_chromium_theme_dirs(root, document_origins):
+            try:
+                rel_paths.append(theme_dir.relative_to(home))
+            except ValueError:
+                pass
     return _iter_existing_rel_paths(rel_paths)
 
 
-def _backup_paths_for_restore(settings_data: dict[str, str]) -> list[Path]:
+def _gecko_browser_roots() -> list[Path]:
+    """Return supported Firefox and Zen profile roots."""
+    home = Path.home()
+    return [
+        home / ".mozilla" / "firefox",
+        home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+        home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+        home / ".zen",
+        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
+    ]
+
+
+def _backup_paths_for_restore(
+    settings_data: dict[str, str], theme_name: str = ""
+) -> list[Path]:
     """Return the minimal set of paths needed for a restore point."""
-    return _iter_existing_rel_paths(
+    paths = (
         _STATIC_BACKUP_PATHS
         + _current_theme_backup_paths(settings_data)
         + _current_codex_theme_backup_paths()
     )
+    if theme_name:
+        slug = theme_name.lower().replace(" ", "-")
+        extension_dir = f"theme-maker.{slug}-theme-1.0.0"
+        paths.extend(
+            [
+                Path(".antigravity/extensions") / extension_dir,
+                Path(".vscode/extensions") / extension_dir,
+                Path(".vscodium/extensions") / extension_dir,
+                Path(".var/app/com.visualstudio.code/data/vscode/extensions")
+                / extension_dir,
+                Path(".var/app/com.vscodium.codium/data/vscodium/extensions")
+                / extension_dir,
+            ]
+        )
+    return _iter_existing_rel_paths(paths)
 
 
 def _read_codex_theme_name() -> str | None:
@@ -384,7 +457,7 @@ def create_undo_backup(theme_name: str = "") -> tuple[Path, list[str]]:
         ):
             pass
 
-    backup_paths = _backup_paths_for_restore(settings_data)
+    backup_paths = _backup_paths_for_restore(settings_data, theme_name)
     for rel_path in backup_paths:
         src = home / rel_path
         if src.exists() or src.is_symlink():
@@ -702,11 +775,13 @@ def apply_dash_to_dock(p: dict) -> list[str]:
     return log
 
 
-def apply_terminal(output_dir: Path, name: str) -> list[str]:
+def apply_terminal(
+    output_dir: Path, name: str, opacity: float = 0.88
+) -> list[str]:
     """Install Ptyxis palette, Starship config, Pywal files, Xresources."""
     log: list[str] = []
     home = Path.home()
-    slug = name.lower().replace(" ", "")
+    slug = name.lower().replace(" ", "-")
 
     # Ptyxis palette
     ptyxis_src = output_dir / "terminal" / "ptyxis" / f"{slug}.palette"
@@ -737,9 +812,12 @@ def apply_terminal(output_dir: Path, name: str) -> list[str]:
                 if uuid:
                     path = f"org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/{uuid}/"
                     _gsettings_set(path, "palette", name)
-                    _gsettings_set(path, "opacity", "0.88")
+                    _gsettings_set(path, "opacity", f"{opacity:.2f}")
                     _gsettings_set("org.gnome.Ptyxis", "scrollbar-policy", "never")
-                    log.append(f"  Applied Ptyxis palette '{name}', set opacity to 0.88, and hid scrollbar")
+                    log.append(
+                        f"  Applied Ptyxis palette '{name}', set opacity to "
+                        f"{opacity:.2f}, and hid scrollbar"
+                    )
         except Exception as e:
             log.append(f"  [WARN] Failed to configure Ptyxis profile via gsettings: {e}")
 
@@ -773,63 +851,257 @@ def apply_terminal(output_dir: Path, name: str) -> list[str]:
     return log
 
 
+_THEME_MAKER_USER_PREF = (
+    'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);'
+)
+
+
+def _enable_gecko_user_chrome(user_js: Path) -> None:
+    """Enable userChrome.css without overwriting unrelated user.js preferences."""
+    content = user_js.read_text() if user_js.exists() else ""
+    pattern = re.compile(
+        r'^\s*user_pref\("toolkit\.legacyUserProfileCustomizations\.stylesheets"'
+        r"\s*,\s*(?:true|false)\s*\);\s*$",
+        re.MULTILINE,
+    )
+    if pattern.search(content):
+        content = pattern.sub(_THEME_MAKER_USER_PREF, content)
+    else:
+        content = content.rstrip() + ("\n" if content.strip() else "") + _THEME_MAKER_USER_PREF
+    user_js.write_text(content.rstrip() + "\n")
+
+
+def _install_gecko_theme(src: Path, root: Path, label: str) -> list[str]:
+    """Install generated CSS into every declared profile under a Gecko root."""
+    log: list[str] = []
+    if not src.exists():
+        return log
+    for profile_dir in _browser_profiles(root):
+        try:
+            chrome_dir = profile_dir / "chrome"
+            chrome_dir.mkdir(parents=True, exist_ok=True)
+            for filename in ("userChrome.css", "userContent.css"):
+                generated = src / filename
+                if generated.exists():
+                    _copy_file(generated, chrome_dir / filename)
+            _enable_gecko_user_chrome(profile_dir / "user.js")
+            log.append(f"  Installed {label} theme to {profile_dir.name}")
+        except OSError as exc:
+            log.append(f"  [WARN] Could not theme {label} profile {profile_dir}: {exc}")
+    return log
+
+
+def _is_theme_maker_chromium_theme(theme_dir: Path) -> bool:
+    manifest = _load_json(theme_dir / "manifest.json")
+    description = manifest.get("description", "")
+    return isinstance(description, str) and "Theme Maker" in description
+
+
+def _chromium_browser_roots(home: Path | None = None) -> list[tuple[str, Path]]:
+    """Return supported Chromium-family native and sandbox profile roots."""
+    home = home or Path.home()
+    return [
+        ("Chrome", home / ".config" / "google-chrome"),
+        ("Chromium", home / ".config" / "chromium"),
+        ("Brave", home / ".config" / "BraveSoftware" / "Brave-Browser"),
+        (
+            "Brave Flatpak",
+            home
+            / ".var"
+            / "app"
+            / "com.brave.Browser"
+            / "config"
+            / "BraveSoftware"
+            / "Brave-Browser",
+        ),
+        ("Helium", home / ".config" / "net.imput.helium"),
+        (
+            "Helium Flatpak",
+            home / ".var" / "app" / "net.imput.helium" / "config" / "net.imput.helium",
+        ),
+        ("Edge", home / ".config" / "microsoft-edge"),
+    ]
+
+
+def _flatpak_document_origins() -> dict[str, Path]:
+    """Map Flatpak document portal IDs to their writable host paths."""
+    try:
+        result = _run(
+            ["flatpak", "documents", "--columns=id,origin"], timeout=5
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    origins: dict[str, Path] = {}
+    for line in result.stdout.splitlines():
+        doc_id, separator, origin = line.partition("\t")
+        if separator and doc_id and origin:
+            origins[doc_id] = Path(origin).expanduser()
+    return origins
+
+
+def _resolve_flatpak_theme_path(
+    theme_dir: Path, document_origins: dict[str, Path]
+) -> Path:
+    """Translate a sandbox /run/*/doc/<id> path to its host origin."""
+    parts = theme_dir.parts
+    try:
+        doc_index = parts.index("doc")
+        doc_id = parts[doc_index + 1]
+    except (ValueError, IndexError):
+        return theme_dir
+    return document_origins.get(doc_id, theme_dir)
+
+
+def _active_chromium_theme_dirs(
+    browser_root: Path, document_origins: dict[str, Path] | None = None
+) -> list[Path]:
+    """Return active Theme Maker directories used by profiles in a browser root."""
+    found: list[Path] = []
+    if not browser_root.exists():
+        return found
+    origins = document_origins if document_origins is not None else _flatpak_document_origins()
+    try:
+        profile_dirs = [p for p in browser_root.iterdir() if p.is_dir()]
+    except OSError:
+        return found
+    for profile in profile_dirs:
+        preferences = _load_json(profile / "Preferences")
+        theme = preferences.get("extensions", {}).get("theme", {})
+        pack = theme.get("pack") if isinstance(theme, dict) else None
+        if not isinstance(pack, str):
+            continue
+        theme_dir = _resolve_flatpak_theme_path(Path(pack).expanduser(), origins)
+        if theme_dir not in found and _is_theme_maker_chromium_theme(theme_dir):
+            found.append(theme_dir)
+    return found
+
+
+def _update_active_chromium_themes(
+    src: Path,
+    browser_root: Path,
+    document_origins: dict[str, Path] | None = None,
+    updated: set[Path] | None = None,
+) -> int:
+    """Refresh active Theme Maker unpacked themes without modifying Preferences."""
+    updated = updated if updated is not None else set()
+    initial_count = len(updated)
+    if not browser_root.exists():
+        return 0
+    for theme_dir in _active_chromium_theme_dirs(browser_root, document_origins):
+        if theme_dir in updated:
+            continue
+        try:
+            if theme_dir.resolve() == src.resolve():
+                updated.add(theme_dir)
+                continue
+        except OSError:
+            pass
+        _copy_tree(src, theme_dir)
+        updated.add(theme_dir)
+    return len(updated) - initial_count
+
+
 def apply_browsers(output_dir: Path, name: str) -> list[str]:
-    """Copy browser theme files to Firefox, Zen, and Chrome profile dirs."""
+    """Install browser themes across native, Flatpak, and Snap profiles."""
     log: list[str] = []
     home = Path.home()
+    firefox_src = output_dir / "browsers" / "firefox"
+    zen_src = output_dir / "browsers" / "zen"
 
-    # Firefox - find profile
-    ff_profiles = home / ".mozilla" / "firefox"
-    if ff_profiles.exists():
-        for profile_dir in ff_profiles.iterdir():
-            if profile_dir.is_dir() and ".default-release" in profile_dir.name:
-                chrome_dir = profile_dir / "chrome"
-                chrome_dir.mkdir(parents=True, exist_ok=True)
-                ff_src = output_dir / "browsers" / "firefox"
-                if ff_src.exists():
-                    for f in ["userChrome.css", "userContent.css"]:
-                        src = ff_src / f
-                        if src.exists():
-                            _copy_file(src, chrome_dir / f)
-                    userjs = ff_src / "user.js"
-                    if userjs.exists():
-                        _copy_file(userjs, profile_dir / "user.js")
-                    log.append(f"  Installed Firefox theme to {profile_dir.name}")
-                break
+    gecko_roots = [
+        (home / ".mozilla" / "firefox", firefox_src, "Firefox"),
+        (
+            home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+            firefox_src,
+            "Firefox Flatpak",
+        ),
+        (
+            home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+            firefox_src,
+            "Firefox Snap",
+        ),
+        (home / ".zen", zen_src, "Zen Browser"),
+        (
+            home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
+            zen_src,
+            "Zen Browser Flatpak",
+        ),
+    ]
+    for root, src, label in gecko_roots:
+        log.extend(_install_gecko_theme(src, root, label))
 
-    # Zen Browser (Flatpak)
-    zen_root = home / ".var" / "app" / "app.zen_browser.zen" / ".zen"
-    if zen_root.exists():
-        for profile_dir in zen_root.iterdir():
-            if profile_dir.is_dir() and "Default" in profile_dir.name:
-                chrome_dir = profile_dir / "chrome"
-                chrome_dir.mkdir(parents=True, exist_ok=True)
-                zen_src = output_dir / "browsers" / "zen"
-                if zen_src.exists():
-                    for f in ["userChrome.css", "userContent.css"]:
-                        src = zen_src / f
-                        if src.exists():
-                            _copy_file(src, chrome_dir / f)
-                    userjs = zen_src / "user.js"
-                    if userjs.exists():
-                        _copy_file(userjs, profile_dir / "user.js")
-                    log.append(f"  Installed Zen Browser theme to {profile_dir.name}")
-                break
-
-    # Chrome
-    chrome_src = output_dir / "browsers" / "chrome"
-    if chrome_src.exists():
-        chrome_dst = home / ".config" / "google-chrome" / name
-        chrome_dst.mkdir(parents=True, exist_ok=True)
-        for f in chrome_src.iterdir():
-            if f.is_file():
-                _copy_file(f, chrome_dst / f.name)
-            elif f.is_dir():
-                _copy_tree(f, chrome_dst / f.name)
-        log.append(f"  Installed Chrome theme to ~/.config/google-chrome/{name}/")
-        log.append("  Load via chrome://extensions > Developer mode > Load unpacked")
+    chromium_src = output_dir / "browsers" / "chrome"
+    if chromium_src.exists():
+        # Keep one stable location. Once loaded unpacked a single time, every
+        # future generated theme updates automatically on browser restart.
+        stable_dir = home / ".local" / "share" / "theme-maker" / "browser-theme"
+        _copy_tree(chromium_src, stable_dir)
+        updated = 0
+        updated_dirs: set[Path] = set()
+        document_origins = _flatpak_document_origins()
+        for _, browser_root in _chromium_browser_roots(home):
+            updated += _update_active_chromium_themes(
+                chromium_src, browser_root, document_origins, updated_dirs
+            )
+        brave_flatpak_stable = (
+            home
+            / ".var"
+            / "app"
+            / "com.brave.Browser"
+            / "config"
+            / "theme-maker"
+            / "browser-theme"
+        )
+        if brave_flatpak_stable.parents[2].exists():
+            _copy_tree(chromium_src, brave_flatpak_stable)
+            log.append(
+                f"  Installed Brave Flatpak theme copy to {brave_flatpak_stable}"
+            )
+        log.append(f"  Installed Chromium-family theme to {stable_dir}")
+        if updated:
+            log.append(
+                f"  Updated {updated} active Chromium-family theme location(s); restart the browser"
+            )
+        else:
+            log.append(
+                "  One-time setup: load that folder unpacked in chrome://extensions; future applies update it"
+            )
 
     return log
+
+
+def _register_vscode_extension(
+    ext_root: Path, ext_dir: Path, extension_id: str, version: str = "1.0.0"
+) -> None:
+    """Add a directly copied extension to a VS Code-compatible registry."""
+    registry_file = ext_root / "extensions.json"
+    registry: list[dict] = []
+    if registry_file.exists():
+        try:
+            loaded = json.loads(registry_file.read_text())
+            if isinstance(loaded, list):
+                registry = [entry for entry in loaded if isinstance(entry, dict)]
+        except (json.JSONDecodeError, OSError):
+            pass
+    registry = [
+        entry
+        for entry in registry
+        if entry.get("identifier", {}).get("id") != extension_id
+    ]
+    registry.append(
+        {
+            "identifier": {"id": extension_id},
+            "version": version,
+            "location": {"$mid": 1, "path": str(ext_dir), "scheme": "file"},
+            "relativeLocation": ext_dir.name,
+            "metadata": {
+                "installedTimestamp": int(time.time() * 1000),
+                "pinned": True,
+                "source": "vsix",
+            },
+        }
+    )
+    _write_json(registry_file, registry)
 
 
 def apply_vscode(output_dir: Path, name: str) -> list[str]:
@@ -884,6 +1156,10 @@ def apply_vscode(output_dir: Path, name: str) -> list[str]:
                 if themes_src.exists():
                     for f in themes_src.iterdir():
                         _copy_file(f, ext_dir / "themes" / f.name)
+
+                _register_vscode_extension(
+                    ext_root, ext_dir, f"theme-maker.{slug}-theme"
+                )
 
                 log.append(f"  Installed {label} extension: theme-maker.{slug}-theme-1.0.0")
 
@@ -944,6 +1220,13 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
             if f.is_file():
                 _copy_file(f, themes_dst / f.name)
 
+    # Register the copied extension. Antigravity/VS Code normally writes this
+    # registry during VSIX installation; a directory copy alone is not reliably
+    # discovered, which is why older generated themes appeared in settings but
+    # did not actually load.
+    extension_id = f"theme-maker.{slug}-theme"
+    _register_vscode_extension(ext_root, ext_dir, extension_id)
+
     # Set the theme in Antigravity settings
     settings_file = home / ".config" / "Antigravity" / "User" / "settings.json"
     settings_data = {}
@@ -958,7 +1241,11 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
     if pkg.exists():
         try:
             pkg_data = parse_jsonc(pkg.read_text())
-            display_name = pkg_data.get("displayName", name)
+            themes = pkg_data.get("contributes", {}).get("themes", [])
+            if themes and isinstance(themes[0], dict):
+                display_name = themes[0].get("label", name)
+            else:
+                display_name = pkg_data.get("displayName", name)
         except Exception:
             pass
 
@@ -967,7 +1254,9 @@ def apply_antigravity(output_dir: Path, name: str) -> list[str]:
     settings_file.write_text(json.dumps(settings_data, indent=4))
 
     log.append(f"  Installed Antigravity theme: theme-maker.{slug}-theme-1.0.0")
+    log.append("  Registered Antigravity extension in extensions.json")
     log.append(f"  Set Antigravity color theme to: {display_name}")
+    log.append("  Restart Antigravity to load the new extension")
 
     return log
 
@@ -1144,7 +1433,12 @@ def apply_theme(
             lambda: apply_gnome_settings(name, palette["accent"], wallpaper, palette.get("mode", "dark")),
         ),
         ("Dash to Dock", lambda: apply_dash_to_dock(palette)),
-        ("Terminal", lambda: apply_terminal(output_dir, name)),
+        (
+            "Terminal",
+            lambda: apply_terminal(
+                output_dir, name, float(palette.get("terminal_opacity", 0.88))
+            ),
+        ),
         ("Browsers", lambda: apply_browsers(output_dir, name)),
         ("VS Code", lambda: apply_vscode(output_dir, name)),
         ("Vim", lambda: apply_vim(output_dir, name)),

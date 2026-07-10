@@ -2,17 +2,18 @@
 
 import json
 from pathlib import Path
+from theme_maker.palette import ensure_contrast
 
 
 def generate_ptyxis_palette(p: dict, name: str) -> str:
     return f"""[Palette]
 Name={name}
 CursorColor={p["accent"]}
-CursorTextColor={p["bg_deepest"]}
+CursorTextColor={p["accent_fg"]}
 ForegroundColor={p["text"]}
 BackgroundColor={p["bg_deepest"]}
 SelectionColor={p["accent"]}
-SelectionTextColor=#ffffff
+SelectionTextColor={p["accent_fg"]}
 BoldColor={p["text"]}
 
 Color0={p["ansi_black"]}
@@ -44,8 +45,9 @@ def generate_starship_toml(p: dict) -> str:
     c5 = p["cyan"]          # Docker segment background
     c6 = p["border"]        # Time segment background
     
-    fg_dark = p["bg_deepest"]  # Dark text for light pastel backgrounds
-    fg_light = "#ffffff"       # White text for dark/vibrant backgrounds
+    fg1, fg2, fg3, fg4, fg5, fg6 = [
+        ensure_contrast(p["text"], color) for color in (c1, c2, c3, c4, c5, c6)
+    ]
 
     return f"""add_newline = false
 
@@ -73,59 +75,59 @@ $time\
 
 [username]
 show_always = true
-style_user = "bg:{c1} fg:{fg_light} bold"
-style_root = "bg:{c1} fg:{fg_light} bold"
+style_user = "bg:{c1} fg:{fg1} bold"
+style_root = "bg:{c1} fg:{fg1} bold"
 format = '[$user]($style)'
 disabled = false
 
 [os]
-style = "bg:{c1} fg:{fg_light}"
+style = "bg:{c1} fg:{fg1}"
 disabled = true
 
 [directory]
-style = "bg:{c2} fg:{fg_dark} bold"
+style = "bg:{c2} fg:{fg2} bold"
 format = "[ $path ]($style)"
 truncation_length = 3
 truncation_symbol = "…/"
 
 [git_branch]
 symbol = " "
-style = "bg:{c3} fg:{fg_dark} bold"
+style = "bg:{c3} fg:{fg3} bold"
 format = '[ $symbol$branch ]($style)'
 
 [git_status]
-style = "bg:{c3} fg:{fg_dark} bold"
+style = "bg:{c3} fg:{fg3} bold"
 format = '[$all_status$ahead_behind ]($style)'
 
 [rust]
 symbol = "🦀 "
-style = "bg:{c4} fg:{fg_dark} bold"
+style = "bg:{c4} fg:{fg4} bold"
 format = '[ $symbol($version) ]($style)'
 
 [python]
 symbol = "🐍 "
-style = "bg:{c4} fg:{fg_dark} bold"
+style = "bg:{c4} fg:{fg4} bold"
 format = '[ $symbol($version) ]($style)'
 
 [nodejs]
 symbol = "⬢ "
-style = "bg:{c4} fg:{fg_dark} bold"
+style = "bg:{c4} fg:{fg4} bold"
 format = '[ $symbol($version) ]($style)'
 
 [golang]
 symbol = "🐹 "
-style = "bg:{c4} fg:{fg_dark} bold"
+style = "bg:{c4} fg:{fg4} bold"
 format = '[ $symbol($version) ]($style)'
 
 [docker_context]
 symbol = "🐳 "
-style = "bg:{c5} fg:{fg_dark} bold"
+style = "bg:{c5} fg:{fg5} bold"
 format = '[ $symbol$context ]($style)'
 
 [time]
 disabled = false
 time_format = "%R"
-style = "bg:{c6} fg:{fg_light} bold"
+style = "bg:{c6} fg:{fg6} bold"
 format = '[ ♥ $time ]($style)'
 """
 
@@ -311,7 +313,7 @@ def write_terminal_files(output_dir: Path, p: dict, name: str, wallpaper: str):
     # Ptyxis
     ptyxis_dir = output_dir / "terminal" / "ptyxis"
     ptyxis_dir.mkdir(parents=True, exist_ok=True)
-    palette_name = name.lower().replace(" ", "")
+    palette_name = name.lower().replace(" ", "-")
     (ptyxis_dir / f"{palette_name}.palette").write_text(
         generate_ptyxis_palette(p, name)
     )

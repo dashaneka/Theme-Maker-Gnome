@@ -62,6 +62,46 @@ def blend(hex1: str, hex2: str, factor: float) -> str:
     return rgb_to_hex(r, g, b)
 
 
+def relative_luminance(hexc: str) -> float:
+    """Return WCAG relative luminance for a hex color."""
+    channels = []
+    for channel in hex_to_rgb(hexc):
+        value = channel / 255
+        channels.append(
+            value / 12.92
+            if value <= 0.04045
+            else ((value + 0.055) / 1.055) ** 2.4
+        )
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast_ratio(hex1: str, hex2: str) -> float:
+    """Return the WCAG contrast ratio between two hex colors."""
+    lighter, darker = sorted(
+        (relative_luminance(hex1), relative_luminance(hex2)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def ensure_contrast(
+    foreground: str, background: str, minimum: float = 4.5
+) -> str:
+    """Adjust foreground lightness until it is readable on background."""
+    if contrast_ratio(foreground, background) >= minimum:
+        return foreground
+
+    h, s, l = hex_to_hsl(foreground)
+    # Move away from the background luminance. This preserves hue and saturation
+    # while making light palettes darker and dark palettes lighter.
+    direction = -1 if relative_luminance(background) > 0.5 else 1
+    for _ in range(100):
+        l = max(0, min(100, l + direction))
+        candidate = hsl_to_hex(h, s, l)
+        if contrast_ratio(candidate, background) >= minimum:
+            return candidate
+    return "#000000" if direction < 0 else "#ffffff"
+
+
 def color_distance(c1: np.ndarray, c2: np.ndarray) -> float:
     return float(np.sqrt(np.sum((c1.astype(float) - c2.astype(float)) ** 2)))
 
@@ -201,8 +241,16 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "", mode: str = "dar
         insensitive_bg = hsl_to_hex(ah, max(5, a_s * 0.06), 7)
 
     # ── Accent variants ──
-    accent_hover = hsl_to_hex(ah, min(100, a_s + 5), min(65, al + 8))
-    accent_light = hsl_to_hex(ah, min(100, a_s + 10), min(70, al + 12))
+    accent = ensure_contrast(accent, bg_main)
+    _, _, accent_l = hex_to_hsl(accent)
+    if mode == "light":
+        # In light themes these variants are used for links and syntax as well as
+        # controls, so making them brighter causes unreadable pastel-on-white UI.
+        accent_hover = hsl_to_hex(ah, min(100, a_s + 5), max(18, accent_l - 5))
+        accent_light = hsl_to_hex(ah, min(100, a_s + 10), max(15, accent_l - 9))
+    else:
+        accent_hover = hsl_to_hex(ah, min(100, a_s + 5), min(78, accent_l + 7))
+        accent_light = hsl_to_hex(ah, min(100, a_s + 10), min(85, accent_l + 12))
     accent_soft = hsl_to_hex((ah + 15) % 360, max(30, a_s * 0.6), al)
     accent_rose = hsl_to_hex(ah, max(40, a_s * 0.7), min(75, al + 20))
 
@@ -219,6 +267,17 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "", mode: str = "dar
 
     # ── Warning uses actual yellow-amber only for semantics ──
     warning = hsl_to_hex(35, 70, 58)
+
+    # Semantic colors frequently appear as text in editors and browser UI.
+    accent_hover = ensure_contrast(accent_hover, bg_main)
+    accent_light = ensure_contrast(accent_light, bg_main)
+    accent_soft = ensure_contrast(accent_soft, bg_main)
+    accent_rose = ensure_contrast(accent_rose, bg_main)
+    green = ensure_contrast(green, bg_main)
+    blue = ensure_contrast(blue, bg_main)
+    magenta = ensure_contrast(magenta, bg_main)
+    cyan = ensure_contrast(cyan, bg_main)
+    warning = ensure_contrast(warning, bg_main)
 
     # ── ANSI terminal colors ──
     ansi = {}
@@ -239,7 +298,7 @@ def generate_palette(accent_hex: str, wallpaper_path: str = "", mode: str = "dar
     ansi["bright_blue"] = lighten(blue, 10)
     ansi["bright_magenta"] = lighten(magenta, 12)
     ansi["bright_cyan"] = lighten(cyan, 10)
-    ansi["bright_white"] = lighten(text, 3)
+    ansi["bright_white"] = darken(text, 3) if mode == "light" else lighten(text, 3)
 
     # ── Deep maroon (for subtle uses) ──
     deep_maroon = hsl_to_hex(ah, max(30, a_s * 0.5), 80 if mode == "light" else 20)

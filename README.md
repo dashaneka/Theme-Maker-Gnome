@@ -2,9 +2,18 @@
 
 Generate complete system-wide GNOME themes from any wallpaper image. Extracts dominant colors, builds a full palette from your chosen accent, and produces ready-to-use theme files for every part of your desktop.
 
+## Highlights in 1.1.0
+
+- Contrast-checked light and dark palettes across GTK, browsers, terminals, and editors
+- Reliable Firefox, Zen, Chrome, Chromium, Brave, Helium, and Edge profile updates
+- Direct, registered VS Code and Antigravity extension installation
+- Read-only `--dry-run` reports and reusable TOML presets
+- `--apply-existing` support for both new and legacy generated theme folders
+- Automatic restore points plus regression tests for critical apply workflows
+
 ## What it generates
 
-One command produces **34 files** across 11 targets:
+One command produces a complete theme across these targets:
 
 | Target | Files |
 |--------|-------|
@@ -13,13 +22,13 @@ One command produces **34 files** across 11 targets:
 | GNOME Shell | Panel, overview, quick settings, OSD, lock screen |
 | Firefox | userChrome.css, userContent.css, user.js |
 | Zen Browser | Same as Firefox (Flatpak-aware) |
-| Google Chrome | manifest.json theme |
+| Chrome / Chromium / Brave / Helium / Edge | Refreshable unpacked theme |
 | Ptyxis Terminal | 16-color palette file |
 | Starship Prompt | Accent-colored prompt config |
 | Pywal | colors.sh, colors.json, colors.css, sequences, plain |
 | Xresources | 16-color terminal config |
 | VS Code (Flatpak) | Full extension with 200+ UI colors, 39 token rules |
-| Antigravity | VSIX package (auto-installed) |
+| Antigravity | Direct-copy extension with registry activation |
 | OpenCode | Theme JSON |
 | Kilo Code | Theme JSON |
 | Codex CLI | TextMate `.tmTheme` + `tui.theme` config |
@@ -33,6 +42,9 @@ One command produces **34 files** across 11 targets:
 - Pillow (`pip install Pillow`)
 - NumPy (`pip install numpy`)
 - GNOME desktop (Fedora, Ubuntu, Arch, etc.)
+- `ctgen` / clickgen and ImageMagick 7 for cursor generation
+- Papirus-Dark for inherited application icons
+- `git`; `rsync` is optional but recommended
 
 ## Installation
 
@@ -74,30 +86,110 @@ theme-maker ~/Pictures/wallpaper.jpg -n "MyTheme" -o ~/MyTheme
 
 Files are saved to `~/MyTheme/` with an `INSTALL.md` for manual setup.
 
+### Generate a light theme
+
+```bash
+theme-maker ~/Pictures/wallpaper.jpg -n "MyLightTheme" --light --apply
+```
+
+### Preview changes without writing
+
+```bash
+theme-maker ~/Pictures/wallpaper.jpg -n "Ocean" --apply --dry-run --no-interactive
+```
+
+The report shows detected applications and browser profiles, dependencies,
+selected components, settings, paths, and restart requirements. A dry run does
+not generate files, create a backup, or change desktop settings.
+
+### Apply a previously generated theme
+
+Every newly generated theme includes `theme-maker.json`, which stores its name,
+wallpaper, palette, mode, opacity, and component selection. Reapply it without
+rebuilding icons or cursors:
+
+```bash
+theme-maker --apply-existing ~/Themes/Ocean
+```
+
+Older Theme Maker output folders without the manifest are also supported by
+reading their GTK and Pywal files.
+
+### Reusable TOML presets
+
+Save the resolved options while generating:
+
+```bash
+theme-maker wallpaper.jpg -n "Ocean" -a "#4080ff" --light \
+  --components gtk,gnome,browsers,antigravity,icons \
+  --terminal-opacity 0.91 --save-config ocean.toml --no-interactive
+```
+
+Then reuse or share the preset:
+
+```bash
+theme-maker --config ocean.toml
+```
+
+Preset format:
+
+```toml
+name = "Ocean"
+wallpaper = "/home/user/Pictures/ocean.jpg"
+accent = "#4080ff"
+mode = "light"
+output = "/home/user/Themes/Ocean"
+apply = true
+components = ["gtk", "gnome", "browsers", "antigravity", "icons"]
+terminal_opacity = 0.91
+no_interactive = true
+```
+
+Available component keys are `gtk`, `gnome`, `dock`, `terminal`, `browsers`,
+`vscode`, `vim`, `antigravity`, `opencode`, `kilo`, `codex`, `fastfetch`,
+`icons`, and `cursors`. Explicit command-line values override preset values.
+
 ### All options
 
 ```
-usage: theme-maker [-h] [-n NAME] [-a ACCENT] [-o OUTPUT] [--apply]
+usage: theme-maker [-h] [-w WALLPAPER_PATH] [-n NAME] [-a ACCENT]
+                   [--light | --dark]
+                   [-o OUTPUT] [--apply | --no-apply]
                    [--backup] [--restore [RESTORE]] [--doctor]
-                   [--watch] [--watch-interval WATCH_INTERVAL]
-                   [--no-interactive] [-V]
+                   [--watch] [--apply-existing THEME_DIR] [--dry-run]
+                   [--config PRESET.toml] [--save-config PRESET.toml]
+                   [--components LIST] [--terminal-opacity VALUE]
+                   [--watch-interval WATCH_INTERVAL]
+                   [--no-interactive | --interactive] [-V]
                    [wallpaper]
 
 positional arguments:
   wallpaper            Path to wallpaper image (auto-detects if omitted)
 
 options:
+  -w, --wallpaper      Named form of the wallpaper path
   -n, --name NAME      Theme name (prompted if omitted)
   -a, --accent ACCENT  Override accent color as hex (e.g. #c41e3a)
+  --light              Generate a light theme
+  --dark               Generate a dark theme, overriding a light preset
   -o, --output OUTPUT  Output directory (default: ~/<ThemeName>)
   --apply              Apply theme system-wide after generating
+  --no-apply           Override a preset that enables automatic apply
   --backup              Backup current theme as a reusable template
   --restore [RESTORE]   Restore the last saved theme state or a backup dir
   --doctor              Check dependencies and desktop readiness
   --watch               Watch wallpaper changes and auto-regenerate
+  --apply-existing DIR  Apply a previously generated Theme Maker directory
+  --dry-run             Preview detected targets and changes without writes
+  --config FILE         Load a reusable TOML preset
+  --save-config FILE    Save resolved options as a TOML preset
+  --components LIST     Comma-separated components to apply
+  --terminal-opacity N  Ptyxis opacity between 0.10 and 1.00
   --watch-interval N    Wallpaper poll interval in seconds
   --no-interactive     Skip all prompts, use defaults
+  --interactive        Override a preset and enable prompts
   -V, --version        Show version
+```
 
 ### Restore and watch
 
@@ -122,7 +214,6 @@ theme-maker --watch --apply
 
 `--watch` regenerates and reapplies the theme whenever the wallpaper path or
 file timestamp changes.
-```
 
 ## How it works
 
@@ -141,12 +232,13 @@ file timestamp changes.
 
 4. **File generation** -- Each generator takes the palette dict and produces complete, ready-to-use config files using f-string templates.
 
-5. **System apply** -- Sets gsettings, creates symlinks, copies files to correct locations, builds and installs VSIX for Antigravity, updates editor configs, and installs a Codex TUI theme.
+5. **System apply** -- Saves a restore point, sets GNOME settings, installs desktop assets, discovers browser profiles, refreshes Chrome-family themes, registers VS Code-compatible extensions, and updates application configs. Antigravity is installed by direct copy because its CLI installer can hang.
 
 ## Output structure
 
 ```
 ~/MyTheme/
+  theme-maker.json
   INSTALL.md
   gtk-theme/
     gtk3.css
@@ -169,9 +261,9 @@ file timestamp changes.
   editors/
     vscode/     (package.json, settings.json, themes/<name>-color-theme.json)
     antigravity/ (same as vscode)
-    opencode/   (<name>.json, opencode.json)
-    kilo/       (<name>.json, kv.json)
-    codex/      (<name>.tmTheme, config.json)
+    opencode/   (<name>.json, tui.json)
+    kilo/       (<name>.json, kilo.jsonc)
+    codex/      (<name>.tmTheme)
     vim/        (colors/<name>.vim)  ← Full Vim/Neovim color scheme
   fastfetch/
     config.jsonc
@@ -223,6 +315,8 @@ colorscheme <theme_name>
 - **Subtle panels** -- Backgrounds are never pure black; they carry a faint tint of the accent hue for warmth.
 - **No colored window borders** -- Active window decorations use subtle shadows, not accent-colored outlines.
 - **Translucent quick toggles** -- GNOME Shell quick settings use `alpha(accent, 0.18)` when checked, not garish solid backgrounds.
+- **Light and dark modes** -- Both modes use contrast-checked foreground and semantic colors, with matching GTK and editor metadata.
+- **Browser-profile aware** -- Reads Firefox and Zen `profiles.ini`, supports native/Flatpak/Snap locations, preserves existing `user.js`, and updates active Theme Maker Chrome, Chromium, Brave, Helium, and Edge theme folders. Flatpak document-portal paths are resolved back to their writable host origins.
 - **Flatpak-aware** -- Knows where VS Code Flatpak, Zen Browser Flatpak, and other sandboxed apps store their data.
 
 ## License

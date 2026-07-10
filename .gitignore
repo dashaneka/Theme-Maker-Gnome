@@ -24,3 +24,5 @@ Thumbs.db
 
 # AI session logs / large generated docs
 themeCreation-*.md
+.codex
+theme_maker/.codex

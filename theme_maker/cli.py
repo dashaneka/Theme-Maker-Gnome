@@ -24,7 +24,13 @@ from theme_maker.generators.editors import write_editor_files
 from theme_maker.generators.extras import write_extra_files
 from theme_maker.generators.icons import generate_icon_theme
 from theme_maker.generators.cursors import generate_cursor_theme
-from theme_maker.applier import apply_theme, create_undo_backup, restore_theme
+from theme_maker.applier import (
+    _browser_profiles,
+    _chromium_browser_roots,
+    apply_theme,
+    create_undo_backup,
+    restore_theme,
+)
 
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
@@ -399,6 +405,12 @@ def _build_cli_args(args: argparse.Namespace, wallpaper: str) -> list[str]:
         build_args.extend(["--accent", args.accent])
     if args.output:
         build_args.extend(["--output", args.output])
+    if args.mode == "light":
+        build_args.append("--light")
+    if args.components:
+        build_args.extend(["--components", ",".join(args.components)])
+    if args.terminal_opacity is not None:
+        build_args.extend(["--terminal-opacity", str(args.terminal_opacity)])
     return build_args
 
 
@@ -411,6 +423,138 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("expected a positive integer")
     return parsed
+
+
+def _opacity(value: str | float) -> float:
+    """Parse a terminal opacity between 0.10 and 1.00."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("expected a number between 0.10 and 1.00") from exc
+    if not 0.10 <= parsed <= 1.00:
+        raise argparse.ArgumentTypeError("expected a number between 0.10 and 1.00")
+    return parsed
+
+
+_COMPONENT_LABELS = {
+    "gtk": "GTK Theme",
+    "gnome": "GNOME Settings",
+    "dock": "Dash to Dock",
+    "terminal": "Terminal",
+    "browsers": "Browsers",
+    "vscode": "VS Code",
+    "vim": "Vim",
+    "antigravity": "Antigravity",
+    "opencode": "OpenCode",
+    "kilo": "Kilo Code",
+    "codex": "Codex",
+    "fastfetch": "Fastfetch",
+    "icons": "Icon Theme",
+    "cursors": "Cursor Theme",
+}
+
+
+def _components(value: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Normalize and validate a component selection."""
+    raw = value if isinstance(value, (list, tuple)) else value.split(",")
+    selected = [str(item).strip().lower() for item in raw if str(item).strip()]
+    if not selected:
+        raise argparse.ArgumentTypeError("select at least one component")
+    invalid = sorted(set(selected) - set(_COMPONENT_LABELS))
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"unknown component(s): {', '.join(invalid)}; choose from "
+            + ", ".join(_COMPONENT_LABELS)
+        )
+    return list(dict.fromkeys(selected))
+
+
+def _component_skips(selected: list[str] | None) -> list[str]:
+    """Translate selected component keys to apply_theme skip labels."""
+    if not selected:
+        return []
+    return [label for key, label in _COMPONENT_LABELS.items() if key not in selected]
+
+
+def _load_preset(path: Path) -> dict:
+    """Load and validate a Theme Maker TOML preset."""
+    try:
+        import tomllib
+
+        data = tomllib.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"could not load preset {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("preset must contain a TOML table")
+
+    allowed = {
+        "name",
+        "wallpaper",
+        "accent",
+        "mode",
+        "output",
+        "apply",
+        "components",
+        "terminal_opacity",
+        "no_interactive",
+    }
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise ValueError(f"unknown preset key(s): {', '.join(unknown)}")
+    for key in ("name", "wallpaper", "accent", "mode", "output"):
+        if key in data and not isinstance(data[key], str):
+            raise ValueError(f"preset {key} must be a string")
+    for key in ("apply", "no_interactive"):
+        if key in data and not isinstance(data[key], bool):
+            raise ValueError(f"preset {key} must be true or false")
+    if "mode" in data and data["mode"] not in {"dark", "light"}:
+        raise ValueError("preset mode must be 'dark' or 'light'")
+    if "components" in data:
+        data["components"] = _components(data["components"])
+    if "terminal_opacity" in data:
+        data["terminal_opacity"] = _opacity(data["terminal_opacity"])
+    if "accent" in data:
+        data["accent"] = _normalize_hex_color(str(data["accent"]))
+
+    # Relative paths in a shared preset are resolved beside the preset file.
+    for key in ("wallpaper", "output"):
+        if data.get(key):
+            candidate = Path(str(data[key])).expanduser()
+            if not candidate.is_absolute():
+                candidate = path.parent / candidate
+            data[key] = str(candidate.resolve())
+    return data
+
+
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _save_preset(
+    path: Path,
+    args: argparse.Namespace,
+    wallpaper: str,
+    mode: str,
+    name: str,
+    accent: str,
+    output: Path,
+) -> None:
+    """Save the resolved invocation as a reusable TOML preset."""
+    components = args.components or list(_COMPONENT_LABELS)
+    lines = [
+        f"name = {_toml_string(name)}",
+        f"wallpaper = {_toml_string(wallpaper)}",
+        f"accent = {_toml_string(accent)}",
+        f"mode = {_toml_string(mode)}",
+        f"output = {_toml_string(str(output))}",
+        f"apply = {'true' if args.apply else 'false'}",
+        "components = [" + ", ".join(_toml_string(item) for item in components) + "]",
+        f"terminal_opacity = {(args.terminal_opacity or 0.88):.2f}",
+        f"no_interactive = {'true' if args.no_interactive else 'false'}",
+    ]
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
 
 
 def _resolve_wallpaper_argument(args: argparse.Namespace) -> str | None:
@@ -429,12 +573,16 @@ def _resolve_wallpaper_argument(args: argparse.Namespace) -> str | None:
     return named or positional
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(defaults: dict | None = None) -> argparse.ArgumentParser:
     """Create the CLI parser with grouped help and examples."""
+    defaults = defaults or {}
     epilog = """Examples:
   theme-maker
   theme-maker --wallpaper ~/Pictures/wallpaper.jpg --name MyTheme --apply
   theme-maker ~/Pictures/wallpaper.jpg -a #2060c0 -y
+  theme-maker ~/Pictures/wallpaper.jpg --apply --dry-run --no-interactive
+  theme-maker --apply-existing ~/Themes/MyTheme
+  theme-maker --config my-theme.toml
   theme-maker --restore
   theme-maker --watch --apply
 """
@@ -462,30 +610,45 @@ def _build_parser() -> argparse.ArgumentParser:
         "--name",
         "--theme-name",
         dest="name",
+        default=defaults.get("name"),
         help="Theme name (prompted if omitted)",
     )
     input_group.add_argument(
         "-a",
         "--accent",
+        default=defaults.get("accent"),
         help="Override accent color as hex (for example #c41e3a)",
     )
-    input_group.add_argument(
+    mode_group = input_group.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--light",
-        action="store_true",
+        dest="mode",
+        action="store_const",
+        const="light",
         help="Generate a light theme instead of a dark theme",
     )
+    mode_group.add_argument(
+        "--dark",
+        dest="mode",
+        action="store_const",
+        const="dark",
+        help="Generate a dark theme (overrides a light preset)",
+    )
+    parser.set_defaults(mode=defaults.get("mode"))
 
     output_group = parser.add_argument_group("Output")
     output_group.add_argument(
         "-o",
         "--output",
+        default=defaults.get("output"),
         help="Output directory (default: ~/Themes/<ThemeName>)",
     )
 
     actions = parser.add_argument_group("Actions")
     actions.add_argument(
         "--apply",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("apply", False)),
         help="Apply the generated theme system-wide after writing files",
     )
     special = parser.add_mutually_exclusive_group()
@@ -510,6 +673,41 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Watch wallpaper changes and regenerate/apply automatically",
     )
+    special.add_argument(
+        "--apply-existing",
+        metavar="THEME_DIR",
+        help="Apply a theme directory previously generated by Theme Maker",
+    )
+
+    actions.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report detected targets and planned changes without writing anything",
+    )
+    actions.add_argument(
+        "--config",
+        metavar="PRESET.toml",
+        help="Load options from a reusable TOML preset",
+    )
+    actions.add_argument(
+        "--save-config",
+        metavar="PRESET.toml",
+        help="Save the resolved options as a reusable TOML preset",
+    )
+    actions.add_argument(
+        "--components",
+        type=_components,
+        default=defaults.get("components"),
+        metavar="LIST",
+        help="Comma-separated components to apply (for example gtk,browsers,icons)",
+    )
+    actions.add_argument(
+        "--terminal-opacity",
+        type=_opacity,
+        default=defaults.get("terminal_opacity"),
+        metavar="VALUE",
+        help="Ptyxis opacity from 0.10 to 1.00",
+    )
 
     actions.add_argument(
         "--watch-interval",
@@ -518,7 +716,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Wallpaper watcher poll interval in seconds",
     )
-    actions.add_argument(
+    interaction = actions.add_mutually_exclusive_group()
+    interaction.add_argument(
         "-y",
         "--yes",
         "--no-interactive",
@@ -526,6 +725,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip prompts and use defaults",
     )
+    interaction.add_argument(
+        "--interactive",
+        dest="no_interactive",
+        action="store_false",
+        help="Enable prompts, overriding a non-interactive preset",
+    )
+    parser.set_defaults(no_interactive=bool(defaults.get("no_interactive", False)))
     actions.add_argument(
         "-V",
         "--version",
@@ -667,6 +873,204 @@ def _generate_all(output_dir: Path, palette: dict, name: str, wallpaper: str) ->
     generate_cursor_theme(output_dir, palette, name)
 
 
+def _write_theme_manifest(
+    output_dir: Path,
+    palette: dict,
+    name: str,
+    wallpaper: str,
+    components: list[str] | None,
+) -> None:
+    """Write application metadata used by --apply-existing."""
+    manifest = {
+        "format_version": 1,
+        "generator": "theme-maker-gnome",
+        "generator_version": __version__,
+        "name": name,
+        "wallpaper": wallpaper,
+        "mode": palette.get("mode", "dark"),
+        "components": components or list(_COMPONENT_LABELS),
+        "palette": palette,
+    }
+    (output_dir / "theme-maker.json").write_text(json.dumps(manifest, indent=2))
+
+
+def _legacy_theme_metadata(output_dir: Path) -> dict:
+    """Reconstruct essential metadata from themes generated before manifests."""
+    name = output_dir.name
+    index_theme = output_dir / "gtk-theme" / "index.theme"
+    if index_theme.exists():
+        try:
+            import configparser
+
+            parser = configparser.ConfigParser()
+            parser.read(index_theme)
+            name = parser.get("Desktop Entry", "Name", fallback=name)
+        except (configparser.Error, OSError):
+            pass
+
+    colors = {}
+    color_files = list((output_dir / "terminal" / "pywal").glob("colors.json"))
+    if color_files:
+        try:
+            colors = json.loads(color_files[0].read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    special = colors.get("special", {}) if isinstance(colors, dict) else {}
+    ansi = colors.get("colors", {}) if isinstance(colors, dict) else {}
+    wallpaper = colors.get("wallpaper", "") if isinstance(colors, dict) else ""
+
+    mode = "dark"
+    gtk_settings = output_dir / "gtk-config" / "gtk3-settings.ini"
+    if gtk_settings.exists():
+        try:
+            if "gtk-application-prefer-dark-theme=false" in gtk_settings.read_text():
+                mode = "light"
+        except OSError:
+            pass
+    accent = special.get("cursor") or ansi.get("color1") or "#c41e3a"
+    palette = {
+        "mode": mode,
+        "wallpaper": wallpaper,
+        "accent": accent,
+        "accent_light": ansi.get("color9", accent),
+        "bg_deepest": special.get("background", "#050505"),
+    }
+    return {
+        "format_version": 0,
+        "name": name,
+        "wallpaper": wallpaper,
+        "mode": mode,
+        "components": list(_COMPONENT_LABELS),
+        "palette": palette,
+    }
+
+
+def _load_existing_theme(output_dir: Path) -> dict:
+    """Load a generated theme manifest, with legacy folder compatibility."""
+    output_dir = output_dir.expanduser().resolve()
+    if not output_dir.is_dir():
+        raise ValueError(f"theme directory not found: {output_dir}")
+    manifest_path = output_dir / "theme-maker.json"
+    if manifest_path.exists():
+        try:
+            metadata = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"invalid theme manifest: {exc}") from exc
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("palette"), dict):
+            raise ValueError("theme-maker.json is missing palette metadata")
+    else:
+        markers = ["gtk-theme", "browsers", "editors", "terminal", "INSTALL.md"]
+        if not any((output_dir / marker).exists() for marker in markers):
+            raise ValueError("directory does not look like a Theme Maker theme")
+        metadata = _legacy_theme_metadata(output_dir)
+    metadata["output_dir"] = output_dir
+    return metadata
+
+
+def _dry_run_lines(
+    output_dir: Path,
+    name: str,
+    wallpaper: str,
+    components: list[str] | None,
+    generating: bool,
+    applying: bool,
+) -> list[str]:
+    """Build a read-only report of targets and planned changes."""
+    home = Path.home()
+    selected = components or list(_COMPONENT_LABELS)
+    lines = [
+        f"  Theme: {name}",
+        f"  Source: {wallpaper or '(stored theme data)'}",
+        f"  Theme directory: {output_dir}",
+        f"  Components: {', '.join(selected)}",
+        "",
+    ]
+    if generating:
+        lines.append("  Generation dependencies:")
+        for command in ("git", "magick", "ctgen", "rsync"):
+            state = shutil.which(command) or "MISSING"
+            lines.append(f"    {command}: {state}")
+        lines.append("")
+
+    lines.append("  Planned changes:")
+    if generating:
+        lines.append(f"    Generate theme files under {output_dir}")
+    if not applying:
+        lines.extend(
+            [
+                "    System apply was not requested; no home-directory or GNOME changes planned",
+                "",
+                "  Add --apply to preview application targets as well.",
+                "  Dry run only: no files or settings were changed.",
+            ]
+        )
+        return lines
+    if "gtk" in selected:
+        lines.append(f"    GTK: install ~/.themes/{name} and update GTK3/GTK4 config")
+    if "gnome" in selected:
+        lines.append("    GNOME: set gtk-theme, color-scheme, accent, and wallpaper")
+    if "dock" in selected:
+        lines.append("    Dash to Dock: update background and running-indicator colors")
+    if "terminal" in selected:
+        lines.append("    Terminal: install Ptyxis, Starship, Pywal, and Xresources files")
+    if "browsers" in selected:
+        roots = [
+            ("Firefox", home / ".mozilla" / "firefox"),
+            (
+                "Firefox Flatpak",
+                home / ".var/app/org.mozilla.firefox/.mozilla/firefox",
+            ),
+            ("Firefox Snap", home / "snap/firefox/common/.mozilla/firefox"),
+            ("Zen", home / ".zen"),
+            ("Zen Flatpak", home / ".var/app/app.zen_browser.zen/.zen"),
+        ]
+        detected = False
+        for label, root in roots:
+            profiles = _browser_profiles(root)
+            for profile in profiles:
+                detected = True
+                lines.append(f"    {label}: update profile {profile}")
+        for label, root in _chromium_browser_roots(home):
+            if root.exists():
+                detected = True
+                profile_count = sum(
+                    1 for preferences in root.glob("*/Preferences") if preferences.is_file()
+                )
+                lines.append(
+                    f"    {label}: refresh active Theme Maker theme locations "
+                    f"across {profile_count} profile(s)"
+                )
+        if not detected:
+            lines.append("    Browsers: no supported profiles detected")
+    app_targets = {
+        "vscode": ("VS Code/VSCodium", [home / ".vscode", home / ".config/Code"]),
+        "antigravity": ("Antigravity", [home / ".antigravity", home / ".config/Antigravity"]),
+        "opencode": ("OpenCode", [home / ".config/opencode"]),
+        "kilo": ("Kilo", [home / ".config/kilo"]),
+        "codex": ("Codex", [home / ".codex"]),
+        "fastfetch": ("Fastfetch", [home / ".config/fastfetch"]),
+    }
+    for component, (label, paths) in app_targets.items():
+        if component in selected:
+            state = "detected" if any(path.exists() for path in paths) else "not detected"
+            lines.append(f"    {label}: {state}; generated config will be installed if applicable")
+    if "vim" in selected:
+        lines.append("    Vim/Neovim: install colorscheme and update init configuration")
+    if "icons" in selected:
+        lines.append("    Icons: install and activate the generated Papirus-derived theme")
+    if "cursors" in selected:
+        lines.append("    Cursors: install and activate the generated Xcursor theme")
+    restart_targets = []
+    if "browsers" in selected:
+        restart_targets.append("browsers")
+    if {"vscode", "antigravity"} & set(selected):
+        restart_targets.append("VS Code-compatible editors")
+    if restart_targets:
+        lines.extend(["", f"  Restart required: {', '.join(restart_targets)}"])
+    lines.extend(["", "  Dry run only: no files or settings were changed."])
+    return lines
+
+
 def _backup_current_theme(output_dir: Path) -> list[str]:
     """Backup current theme settings as a reusable template."""
     log: list[str] = []
@@ -770,8 +1174,26 @@ def _backup_current_theme(output_dir: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    config_probe = argparse.ArgumentParser(add_help=False)
+    config_probe.add_argument("--config")
+    config_args, _ = config_probe.parse_known_args(raw_argv)
+    preset: dict = {}
+    if config_args.config:
+        try:
+            preset = _load_preset(Path(config_args.config).expanduser().resolve())
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+
+    parser = _build_parser(preset)
+    args = parser.parse_args(raw_argv)
+    if args.dry_run and (args.backup or args.restore is not None or args.doctor or args.watch):
+        parser.error("--dry-run is supported for generation/apply and --apply-existing")
+    if args.apply_existing and args.save_config:
+        parser.error("--save-config is only available while generating a theme")
+    if not args.wallpaper and not args.wallpaper_path and preset.get("wallpaper"):
+        args.wallpaper_path = preset["wallpaper"]
     interactive = not args.no_interactive
 
     try:
@@ -810,6 +1232,65 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.watch:
         return _watch_wallpaper(args)
+
+    if args.apply_existing:
+        try:
+            existing = _load_existing_theme(Path(args.apply_existing))
+        except ValueError as exc:
+            print(f"  {RED}Error:{RESET} {exc}")
+            return 1
+        output_dir = existing["output_dir"]
+        name = str(existing.get("name") or output_dir.name)
+        wallpaper = str(existing.get("wallpaper") or "")
+        palette = existing["palette"]
+        if args.terminal_opacity is not None:
+            palette["terminal_opacity"] = args.terminal_opacity
+        selected = args.components or existing.get("components") or list(_COMPONENT_LABELS)
+        try:
+            selected = _components(selected)
+        except argparse.ArgumentTypeError as exc:
+            print(f"  {RED}Error:{RESET} invalid stored component list: {exc}")
+            return 1
+
+        if args.dry_run:
+            print(f"  {BOLD}Existing theme apply preview{RESET}")
+            print()
+            for line in _dry_run_lines(
+                output_dir,
+                name,
+                wallpaper,
+                selected,
+                generating=False,
+                applying=True,
+            ):
+                print(line)
+            print()
+            return 0
+
+        print(f"  {BOLD}Applying existing theme: {name}{RESET}")
+        print(f"  {DIM}From {output_dir}{RESET}")
+        print()
+        backup_dir, backup_logs = create_undo_backup(name)
+        print(f"  {DIM}Saved restore point: {backup_dir}{RESET}")
+        for line in backup_logs:
+            print(f"  {line}")
+        logs = apply_theme(
+            output_dir,
+            name,
+            palette,
+            wallpaper,
+            skip=_component_skips(selected),
+        )
+        for line in logs:
+            print(f"  {line}")
+        print()
+        if any(line.startswith("[FAIL]") for line in logs):
+            print(f"  {RED}{BOLD}Existing theme apply completed with errors.{RESET}")
+            return 1
+        print(f"  {GREEN}{BOLD}Existing theme applied!{RESET}")
+        print(f"  {DIM}Restart open browsers and editors to reload it.{RESET}")
+        print()
+        return 0
 
     # ── Handle backup mode ────────────────────────────────────────────────
     if args.backup:
@@ -911,8 +1392,8 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     # ── Step 5: Generate palette ──────────────────────────────────────────
-    if args.light:
-        mode = "light"
+    if args.mode in {"dark", "light"}:
+        mode = args.mode
     elif interactive:
         mode_input = _prompt_input("Theme mode (dark/light)", "dark").strip().lower()
         mode = "light" if mode_input == "light" else "dark"
@@ -921,6 +1402,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"  {BOLD}Generating palette from accent {accent} ({mode} mode)...{RESET}")
     palette = generate_palette(accent, wallpaper, mode=mode)
+    palette["terminal_opacity"] = args.terminal_opacity or 0.88
 
     _print_palette_table(palette)
     _print_ansi_strip(palette)
@@ -932,11 +1414,43 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── Step 6: Generate theme files ──────────────────────────────────────
     output = args.output or str(Path.home() / "Themes" / name)
-    output_dir = Path(output)
+    output_dir = Path(output).expanduser().resolve()
+
+    if args.dry_run:
+        print(f"  {BOLD}Theme generation and apply preview{RESET}")
+        print()
+        for line in _dry_run_lines(
+            output_dir,
+            name,
+            wallpaper,
+            args.components,
+            generating=True,
+            applying=args.apply,
+        ):
+            print(line)
+        if args.save_config:
+            print(f"  {DIM}Preset was not saved because dry-run never writes files.{RESET}")
+        print()
+        return 0
+
+    if args.save_config:
+        _save_preset(
+            Path(args.save_config),
+            args,
+            wallpaper,
+            mode,
+            name,
+            accent,
+            output_dir,
+        )
+        print(f"  {GREEN}Saved preset:{RESET} {Path(args.save_config).expanduser()}")
+        print()
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"  {BOLD}Generating theme files...{RESET}")
     _generate_all(output_dir, palette, name, wallpaper)
+    _write_theme_manifest(output_dir, palette, name, wallpaper, args.components)
 
     # Count generated files
     file_count = sum(1 for _ in output_dir.rglob("*") if _.is_file())
@@ -967,7 +1481,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {DIM}Saved restore point: {backup_dir}{RESET}")
         for line in backup_logs:
             print(f"  {line}")
-        logs = apply_theme(output_dir, name, palette, wallpaper)
+        logs = apply_theme(
+            output_dir,
+            name,
+            palette,
+            wallpaper,
+            skip=_component_skips(args.components),
+        )
         for line in logs:
             print(f"  {line}")
         print()
@@ -976,7 +1496,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"  {GREEN}{BOLD}Theme applied!{RESET}")
         print(f"  {DIM}Some changes may require logging out and back in.{RESET}")
-        print(f"  {DIM}Chrome theme: load manually via chrome://extensions{RESET}")
+        print(
+            f"  {DIM}Restart open browsers and editors so they reload generated themes.{RESET}"
+        )
     else:
         print(f"  {DIM}Theme files saved to {output_dir}{RESET}")
         print(f"  {DIM}See INSTALL.md for manual installation instructions.{RESET}")

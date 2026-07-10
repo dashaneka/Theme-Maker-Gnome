@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "theme-maker-gnome"
-version = "1.0.0"
+version = "1.1.0"
 description = "Generate system-wide GNOME themes from any wallpaper"
-readme = "INSTALL.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "rajnish"}]
